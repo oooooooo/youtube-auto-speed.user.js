@@ -614,6 +614,17 @@ describe("timestamps", () => {
 		]);
 	});
 
+	it("puts the time in its own element so it can be shown faintly", async () => {
+		stubInnertube([SETLIST_COMMENT]);
+		loadScript();
+		await vi.waitFor(() => expect(timestampsButton().hidden).toBe(false));
+		timestampsButton().click();
+
+		const row = timestampRows()[1];
+		expect(row.querySelector(".yt-speed-time").textContent).toBe("00:22:32");
+		expect(row.textContent).toBe("00:22:32 都落ち / ヨルシカ");
+	});
+
 	it("reads a tab-separated setlist with the time at the end of each line", async () => {
 		stubInnertube([
 			[

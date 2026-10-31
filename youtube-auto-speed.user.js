@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Auto Speed
 // @namespace    https://github.com/oooooooo/youtube-auto-speed
-// @version      1.4.1
+// @version      1.4.2
 // @description  Speeds up videos except for music. You can also adjust the speed manually.
 // @author       ooooooooo
 // @match        https://www.youtube.com/*
@@ -30,6 +30,7 @@
 	const ENFORCE_MS = 2000;
 	const TIMESTAMPS_BTN_ID = "yt-speed-timestamps-btn";
 	const TIMESTAMPS_PANEL_ID = "yt-speed-timestamps-panel";
+	const TIME_CLASS = "yt-speed-time";
 	const MIN_SETLIST_ENTRIES = 3;
 	// Top comments come back in a slightly different order on every request,
 	// so the setlist is not always on the first page.
@@ -95,7 +96,9 @@
       top: calc(100% + 6px);
       left: 0;
       z-index: 9999;
+      width: max-content;
       min-width: 280px;
+      max-width: min(720px, calc(100vw - 32px));
       max-height: 70vh;
       overflow-y: auto;
       padding: 6px;
@@ -118,6 +121,7 @@
       cursor: pointer;
     }
     #${TIMESTAMPS_PANEL_ID} button:hover { background: rgba(255,255,255,0.15); }
+    #${TIMESTAMPS_PANEL_ID} .${TIME_CLASS} { color: rgba(255,255,255,0.5); }
   `;
 
 	function loadDefaultRate() {
@@ -521,9 +525,12 @@
 		panel.replaceChildren(
 			...timestampEntries.map((entry) => {
 				const row = document.createElement("button");
-				row.textContent = entry.title
-					? `${entry.time} ${entry.title}`
-					: entry.time;
+				// The time is faint so the titles stand out.
+				const time = document.createElement("span");
+				time.className = TIME_CLASS;
+				time.textContent = entry.time;
+				row.append(time);
+				if (entry.title) row.append(` ${entry.title}`);
 				row.onclick = () => {
 					seekTo(entry.seconds);
 					panel.hidden = true;
