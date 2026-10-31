@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Auto Speed
 // @namespace    https://github.com/oooooooo/youtube-auto-speed
-// @version      1.2.1
+// @version      1.3.0
 // @description  Speeds up videos except for music. You can also adjust the speed manually.
 // @author       ooooooooo
 // @match        https://www.youtube.com/*
@@ -28,6 +28,7 @@
 	const AUTO_RETRY_COUNT = 15;
 	const AUTO_RETRY_INTERVAL_MS = 120;
 	const ENFORCE_MS = 2000;
+	const START_BTN_ID = "yt-speed-start-btn";
 	const SETLIST_BTN_ID = "yt-speed-setlist-btn";
 	const SETLIST_PANEL_ID = "yt-speed-setlist-panel";
 	const MIN_SETLIST_ENTRIES = 3;
@@ -35,6 +36,8 @@
 	// in a tab-separated column ("1\tSong\tArtist\t0:10:21").
 	const TIMESTAMP_RE = /(?<![\d:])((?:\d{1,2}:)?\d{1,2}:\d{2})(?![\d:])/;
 	const TRACK_NUMBER_RE = /^\d+[.)]?$/;
+	// Viewers often post just the start time ("0:17") as a comment.
+	const TIMESTAMP_ONLY_RE = new RegExp(`^${TIMESTAMP_RE.source}$`);
 	// Used only when the page has no ytcfg, e.g. before YouTube finishes booting.
 	const FALLBACK_INNERTUBE_CONTEXT = {
 		client: { clientName: "WEB", clientVersion: "2.20261029.11.00" },
@@ -48,6 +51,7 @@
 	let observer = null;
 	let setlistVideoId = null;
 	let setlistEntries = [];
+	let startCandidates = [];
 	const hooked = new WeakSet();
 
 	const style = `
@@ -274,6 +278,17 @@
 			container.appendChild(mk(`x${rate.toFixed(1)}`, rate));
 		}
 
+		const startBtn = document.createElement("button");
+		startBtn.id = START_BTN_ID;
+		startBtn.className = BTN_CLASS;
+		startBtn.textContent = "START";
+		startBtn.hidden = true;
+		startBtn.onclick = () => {
+			const seconds = streamStartSeconds();
+			if (seconds != null) seekTo(seconds);
+		};
+		container.appendChild(startBtn);
+
 		const setlistBtn = document.createElement("button");
 		setlistBtn.id = SETLIST_BTN_ID;
 		setlistBtn.className = BTN_CLASS;
@@ -312,13 +327,15 @@
 		const entries = [];
 		for (const line of text.split(/\r?\n/)) {
 			const m = line.match(TIMESTAMP_RE);
-			if (m) {
-				entries.push({
-					time: m[1],
-					seconds: parseTimestamp(m[1]),
-					title: setlistTitle(line.replace(TIMESTAMP_RE, "\t")),
-				});
-			}
+			if (!m) continue;
+			const seconds = parseTimestamp(m[1]);
+			// 0:00 marks the waiting screen, not a song or the stream start.
+			if (seconds === 0) continue;
+			entries.push({
+				time: m[1],
+				seconds,
+				title: setlistTitle(line.replace(TIMESTAMP_RE, "\t")),
+			});
 		}
 		return entries;
 	}
@@ -373,12 +390,21 @@
 		return res.json();
 	}
 
-	async function fetchSetlist(videoId) {
+	function pickStartCandidates(commentTexts) {
+		const seconds = [];
+		for (const text of commentTexts) {
+			const m = text.trim().match(TIMESTAMP_ONLY_RE);
+			if (!m) continue;
+			const sec = parseTimestamp(m[1]);
+			if (sec > 0) seconds.push(sec);
+		}
+		return seconds;
+	}
+
+	async function fetchCommentTexts(videoId) {
 		const token = findCommentsToken(await innertubeNext({ videoId }));
 		if (!token) return [];
-		return pickSetlist(
-			commentTexts(await innertubeNext({ continuation: token })),
-		);
+		return commentTexts(await innertubeNext({ continuation: token }));
 	}
 
 	function reportProblem(title, err) {
@@ -402,15 +428,24 @@
 		if (v) v.currentTime = seconds;
 	}
 
-	function setSetlist(entries) {
+	function setSetlist(entries, starts) {
 		setlistEntries = entries;
+		startCandidates = starts;
 		renderSetlist();
 	}
 
+	// The stream starts at the earliest time in the setlist or in a
+	// timestamp-only comment.
+	function streamStartSeconds() {
+		const times = [...setlistEntries.map((e) => e.seconds), ...startCandidates];
+		return times.length > 0 ? Math.min(...times) : null;
+	}
+
 	function renderSetlist() {
+		const startBtn = document.getElementById(START_BTN_ID);
 		const btn = document.getElementById(SETLIST_BTN_ID);
 		const panel = document.getElementById(SETLIST_PANEL_ID);
-		if (!btn || !panel) return;
+		if (!startBtn || !btn || !panel) return;
 
 		panel.hidden = true;
 		panel.replaceChildren(
@@ -427,19 +462,22 @@
 			}),
 		);
 		btn.hidden = setlistEntries.length === 0;
+		startBtn.hidden = streamStartSeconds() == null;
 	}
 
 	async function loadSetlist() {
 		const videoId = location.pathname === "/watch" ? getVideoId() : null;
 		if (videoId === setlistVideoId) return;
 		setlistVideoId = videoId;
-		setSetlist([]);
+		setSetlist([], []);
 		if (!videoId) return;
 
 		try {
-			const entries = await fetchSetlist(videoId);
+			const texts = await fetchCommentTexts(videoId);
 			// Drop the result if the user navigated to another video meanwhile.
-			if (setlistVideoId === videoId) setSetlist(entries);
+			if (setlistVideoId === videoId) {
+				setSetlist(pickSetlist(texts), pickStartCandidates(texts));
+			}
 		} catch (err) {
 			reportProblem("Failed to load setlist", err);
 		}

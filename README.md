@@ -8,6 +8,7 @@ A userscript that automatically plays YouTube videos at high speed, except for m
 - **Normal playback (1.0x)** for music content
 - **Manual override buttons** in the YouTube header for quick speed adjustment
 - **Setlist button** that lists the timestamps from a setlist comment
+- **Start button** that skips the waiting screen of a stream
 
 ## How It Works
 
@@ -49,9 +50,14 @@ When a top comment has three or more lines with a timestamp,
 a `SET LIST` button appears next to the speed buttons.
 The timestamp can be at the start of the line (`00:22:32 Song / Artist`)
 or in a tab-separated column (`1  Song  Artist  0:10:21`).
+Lines at `0:00` are ignored because they usually mark the waiting screen.
 The comment with the most timestamps is used.
 Click the button to open the list, and click a line to jump to that time
 and close the list.
+
+A `START` button jumps to where the stream starts: the earliest time in the
+setlist or in a comment that is only a timestamp (e.g. `0:17`).
+It also appears when there is no setlist but such a comment exists.
 
 The comments are fetched from YouTube's internal API,
 so this feature may stop working if YouTube changes it.

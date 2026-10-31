@@ -102,6 +102,18 @@ function stubInnertube(commentTexts) {
 	return fetchMock;
 }
 
+function startButton() {
+	return button("START");
+}
+
+function stubPlayer() {
+	const player = document.createElement("div");
+	player.id = "movie_player";
+	player.seekTo = vi.fn();
+	document.body.appendChild(player);
+	return player;
+}
+
 function setlistButton() {
 	return button("SET LIST");
 }
@@ -236,6 +248,7 @@ describe("setlist", () => {
 		await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
 		await vi.advanceTimersByTimeAsync(100);
 		expect(setlistButton().hidden).toBe(true);
+		expect(startButton().hidden).toBe(true);
 	});
 
 	it("does not request comments outside watch pages", () => {
@@ -246,6 +259,7 @@ describe("setlist", () => {
 
 		expect(fetchMock).not.toHaveBeenCalled();
 		expect(setlistButton().hidden).toBe(true);
+		expect(startButton().hidden).toBe(true);
 	});
 
 	it("lists the timestamped lines of the comment with the most timestamps", async () => {
@@ -283,6 +297,107 @@ describe("setlist", () => {
 			"0:17:27 モニタリング / DECO*27",
 			"1:35:22 蜜月アン・ドゥ・トロワ / DATEKEN",
 		]);
+	});
+
+	it("jumps to the earliest time in the setlist with the START button", async () => {
+		stubInnertube([SETLIST_COMMENT]);
+		const player = stubPlayer();
+		loadScript();
+		await vi.waitFor(() => expect(startButton().hidden).toBe(false));
+
+		startButton().click();
+
+		expect(player.seekTo).toHaveBeenCalledWith(9 * 60 + 18, true);
+	});
+
+	it("skips 0:00 and uses the earliest time even when it is not first", async () => {
+		stubInnertube([
+			[
+				"0:00 待機画面",
+				"0:20:00 Song B / Artist",
+				"0:05:00 開始",
+				"0:10:00 Song A / Artist",
+			].join("\n"),
+		]);
+		const player = stubPlayer();
+		loadScript();
+		await vi.waitFor(() => expect(startButton().hidden).toBe(false));
+
+		startButton().click();
+
+		expect(player.seekTo).toHaveBeenCalledWith(5 * 60, true);
+	});
+
+	it("leaves 0:00 lines out of the setlist", async () => {
+		stubInnertube([
+			[
+				"0:00 待機画面",
+				"00:00:00 開始前",
+				"0:05:00 開始",
+				"0:10:00 Song A / Artist",
+				"0:20:00 Song B / Artist",
+			].join("\n"),
+		]);
+		loadScript();
+		await vi.waitFor(() => expect(setlistButton().hidden).toBe(false));
+
+		setlistButton().click();
+
+		expect(setlistRows().map((r) => r.textContent)).toEqual([
+			"0:05:00 開始",
+			"0:10:00 Song A / Artist",
+			"0:20:00 Song B / Artist",
+		]);
+	});
+
+	it("does not count 0:00 lines as setlist lines", async () => {
+		const fetchMock = stubInnertube([
+			[
+				"0:00 待機画面",
+				"0:00 また待機",
+				"0:10:00 Song A",
+				"0:20:00 Song B",
+			].join("\n"),
+		]);
+
+		loadScript();
+
+		await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+		await vi.advanceTimersByTimeAsync(100);
+		expect(setlistButton().hidden).toBe(true);
+	});
+
+	it("shows START for a comment that is only a timestamp", async () => {
+		stubInnertube(["配信お疲れ様でした", " 0:17 \n"]);
+		const player = stubPlayer();
+		loadScript();
+		await vi.waitFor(() => expect(startButton().hidden).toBe(false));
+
+		startButton().click();
+
+		expect(player.seekTo).toHaveBeenCalledWith(17, true);
+		expect(setlistButton().hidden).toBe(true);
+	});
+
+	it("does not use a single timestamp with other text as the start", async () => {
+		const fetchMock = stubInnertube(["0:17 ここ好き", "0:00"]);
+
+		loadScript();
+
+		await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+		await vi.advanceTimersByTimeAsync(100);
+		expect(startButton().hidden).toBe(true);
+	});
+
+	it("uses a timestamp-only comment earlier than the setlist as the start", async () => {
+		stubInnertube([SETLIST_COMMENT, "5:00"]);
+		const player = stubPlayer();
+		loadScript();
+		await vi.waitFor(() => expect(startButton().hidden).toBe(false));
+
+		startButton().click();
+
+		expect(player.seekTo).toHaveBeenCalledWith(5 * 60, true);
 	});
 
 	it("seeks to the clicked time and closes the list", async () => {
@@ -343,5 +458,6 @@ describe("setlist", () => {
 		expect(problem.title).toBe("Failed to load setlist");
 		expect(problem.detail).toContain("503");
 		expect(setlistButton().hidden).toBe(true);
+		expect(startButton().hidden).toBe(true);
 	});
 });
