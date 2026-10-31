@@ -655,6 +655,30 @@ describe("timestamps", () => {
 		]);
 	});
 
+	it("sorts the lines by time and drops a summary line repeated in the details", async () => {
+		stubInnertube([
+			[
+				"3:33 ◆ 宙科そぴあ ちゃん",
+				"12:53 ◆ 水宮枢 ちゃん",
+				"",
+				"1:16 開始",
+				"3:33 ◆ 宙科そぴあ ちゃん",
+				"4:31 ・自己紹介",
+				"12:53 ◆ 水宮枢 ちゃん",
+			].join("\n"),
+		]);
+		loadScript();
+		await vi.waitFor(() => expect(timestampsButton().hidden).toBe(false));
+		timestampsButton().click();
+
+		expect(timestampLabels()).toEqual([
+			"1:16 開始",
+			"3:33 ◆ 宙科そぴあ ちゃん",
+			"4:31 ・自己紹介",
+			"12:53 ◆ 水宮枢 ちゃん",
+		]);
+	});
+
 	it("reads a tab-separated setlist with the time at the end of each line", async () => {
 		stubInnertube([
 			[

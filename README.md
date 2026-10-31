@@ -56,6 +56,8 @@ Lines at `0:00` are ignored because they usually mark the waiting screen.
 Lines with a date (`5/20(水) 18:00`, `2026/6/11`, `6月17日`) are ignored
 because their times are clock times, such as in pasted news headlines.
 The comment with the most timestamps is used.
+Its lines are sorted by time, and a line repeated with the same time and
+title (e.g. in a summary before the full list) is shown once.
 
 Viewers also post the start of a stream as a comment that is only a
 timestamp (e.g. `0:17`). The earliest of those is added as `0:17 START`

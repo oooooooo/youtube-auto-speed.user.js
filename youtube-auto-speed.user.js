@@ -372,8 +372,12 @@
 		return { time: m[1], rest: rest.map((f) => f.trim()) };
 	}
 
+	// Some comments put a summary (e.g. one line per guest) before the full
+	// list and repeat its lines there, so the lines are sorted by time and a
+	// line that repeats an earlier one is dropped.
 	function parseSetlist(text) {
 		const entries = [];
+		const seen = new Set();
 		for (const line of text.split(/\r?\n/)) {
 			if (DATE_RE.test(line)) continue;
 			const parts = splitSetlistLine(line);
@@ -381,13 +385,13 @@
 			const seconds = parseTimestamp(parts.time);
 			// 0:00 marks the waiting screen, not a song or the stream start.
 			if (seconds === 0) continue;
-			entries.push({
-				time: parts.time,
-				seconds,
-				title: setlistTitle(parts.rest),
-			});
+			const title = setlistTitle(parts.rest);
+			const key = `${seconds}\t${title}`;
+			if (seen.has(key)) continue;
+			seen.add(key);
+			entries.push({ time: parts.time, seconds, title });
 		}
-		return entries;
+		return entries.sort((a, b) => a.seconds - b.seconds);
 	}
 
 	function pickSetlist(commentTexts) {
