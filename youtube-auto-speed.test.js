@@ -158,6 +158,57 @@ function stubPlayer() {
 	return player;
 }
 
+// A stand-in for YouTube's #movie_player: the player API reports the video it
+// has loaded, and the <video> inside it is playing.
+function stubWatchPlayer({ videoId, title, duration }) {
+	const player = document.getElementById("movie_player") ?? stubPlayer();
+	player.videoData = { video_id: videoId, title };
+	player.duration = duration;
+	player.getVideoData = () => player.videoData;
+	player.getDuration = () => player.duration;
+	let video = player.querySelector("video");
+	if (!video) {
+		video = document.createElement("video");
+		player.appendChild(video);
+	}
+	Object.defineProperty(video, "duration", {
+		get: () => player.duration,
+		configurable: true,
+	});
+	setPaused(video, false);
+	return { player, video };
+}
+
+function setPaused(video, paused) {
+	Object.defineProperty(video, "paused", {
+		value: paused,
+		configurable: true,
+	});
+}
+
+// The title YouTube renders on the watch page. It can still show the previous
+// video's title for a moment after navigation.
+function renderTitle(title) {
+	let el = document.querySelector("#title h1 yt-formatted-string");
+	if (!el) {
+		const box = document.createElement("div");
+		box.id = "title";
+		box.innerHTML = "<h1><yt-formatted-string></yt-formatted-string></h1>";
+		document.body.appendChild(box);
+		el = box.querySelector("yt-formatted-string");
+	}
+	el.textContent = title;
+}
+
+function navigate(url) {
+	history.replaceState(null, "", url);
+	window.dispatchEvent(new Event("yt-navigate-finish"));
+}
+
+function okResponse(json) {
+	return { ok: true, status: 200, json: async () => json };
+}
+
 function timestampsButton() {
 	return button("TIMESTAMPS");
 }
@@ -192,8 +243,20 @@ function trackListeners(target) {
 
 let untrack = [];
 
+// Observers from earlier loads must be disconnected for the same reason.
+const OriginalMutationObserver = globalThis.MutationObserver;
+let observers = [];
+
+class TrackedMutationObserver extends OriginalMutationObserver {
+	constructor(callback) {
+		super(callback);
+		observers.push(this);
+	}
+}
+
 beforeEach(() => {
 	untrack = [trackListeners(window), trackListeners(document)];
+	vi.stubGlobal("MutationObserver", TrackedMutationObserver);
 	vi.useFakeTimers();
 	localStorage.clear();
 	history.replaceState(null, "", "/");
@@ -202,6 +265,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+	for (const observer of observers) observer.disconnect();
+	observers = [];
 	for (const [target, args] of listeners) target.removeEventListener(...args);
 	listeners = [];
 	for (const restore of untrack) restore();
@@ -255,6 +320,231 @@ describe("default rate", () => {
 		expect(localStorage.getItem(STORAGE_KEY)).toBeNull();
 		expect(activeLabel()).toBe("x2.5");
 		expect(defaultLabel()).toBe("x3.0");
+	});
+});
+
+describe("playback", () => {
+	beforeEach(() => {
+		history.replaceState(null, "", "/watch?v=abc");
+		stubInnertube([]);
+	});
+
+	it("plays a regular video at the default rate", () => {
+		const { video } = stubWatchPlayer({
+			videoId: "abc",
+			title: "Talk",
+			duration: 1200,
+		});
+
+		loadScript();
+
+		expect(video.playbackRate).toBe(3);
+	});
+
+	it("plays a video with a music keyword at 1.0x", () => {
+		const { video } = stubWatchPlayer({
+			videoId: "abc",
+			title: "【歌枠】Sing",
+			duration: 3600,
+		});
+
+		loadScript();
+
+		expect(video.playbackRate).toBe(1);
+	});
+
+	it("treats videos of 6 minutes or less as music", () => {
+		const { player, video } = stubWatchPlayer({
+			videoId: "abc",
+			title: "Song",
+			duration: 360,
+		});
+		loadScript();
+		expect(video.playbackRate).toBe(1);
+
+		player.videoData = { video_id: "def", title: "Talk" };
+		player.duration = 361;
+		navigate("/watch?v=def");
+		vi.advanceTimersByTime(5000);
+
+		expect(video.playbackRate).toBe(3);
+	});
+
+	it("plays Shorts at the default rate", () => {
+		history.replaceState(null, "", "/shorts/xyz");
+		document.body.insertAdjacentHTML(
+			"beforeend",
+			'<div id="shorts-player"><video></video></div>',
+		);
+		const video = document.querySelector("#shorts-player video");
+
+		loadScript();
+
+		expect(video.playbackRate).toBe(3);
+	});
+
+	it("reads the duration from the main player, not from a preview video", () => {
+		const preview = document.createElement("video");
+		Object.defineProperty(preview, "duration", { value: 15 });
+		document.body.prepend(preview);
+		const { video } = stubWatchPlayer({
+			videoId: "abc",
+			title: "Talk",
+			duration: 1200,
+		});
+
+		loadScript();
+
+		expect(video.playbackRate).toBe(3);
+	});
+
+	it("ignores rate changes on a preview video", () => {
+		const preview = document.createElement("video");
+		document.body.prepend(preview);
+		const { video } = stubWatchPlayer({
+			videoId: "abc",
+			title: "Talk",
+			duration: 1200,
+		});
+		loadScript();
+
+		preview.playbackRate = 1;
+		vi.advanceTimersByTime(500);
+
+		expect(activeLabel()).toBe("x3.0");
+		expect(video.playbackRate).toBe(3);
+	});
+
+	it("puts the rate back when YouTube resets it right after setting", () => {
+		const { player, video } = stubWatchPlayer({
+			videoId: "abc",
+			title: "Talk",
+			duration: 1200,
+		});
+		loadScript();
+		player.videoData = { video_id: "def", title: "Talk 2" };
+		navigate("/watch?v=def");
+
+		video.playbackRate = 1;
+		vi.advanceTimersByTime(500);
+
+		expect(video.playbackRate).toBe(3);
+	});
+
+	it("keeps auto speed when YouTube resets the rate while the next video loads", () => {
+		renderTitle("Old talk");
+		const { player, video } = stubWatchPlayer({
+			videoId: "abc",
+			title: "Old talk",
+			duration: 1200,
+		});
+		loadScript();
+
+		// The player still reports the previous video for a moment.
+		navigate("/watch?v=def");
+		video.playbackRate = 1;
+		vi.advanceTimersByTime(500);
+		player.videoData = { video_id: "def", title: "New talk" };
+		renderTitle("New talk");
+		video.dispatchEvent(new Event("loadedmetadata"));
+		vi.advanceTimersByTime(5000);
+
+		expect(video.playbackRate).toBe(3);
+		expect(activeLabel()).toBe("x3.0");
+	});
+
+	it("waits for the player to report the new video before choosing", () => {
+		const { player, video } = stubWatchPlayer({
+			videoId: "abc",
+			title: "Talk",
+			duration: 1200,
+		});
+		loadScript();
+
+		// The player keeps reporting the previous video, then YouTube resets
+		// the rate while loading the new one.
+		navigate("/watch?v=def");
+		vi.advanceTimersByTime(2500);
+		video.playbackRate = 1;
+		vi.advanceTimersByTime(500);
+		player.videoData = { video_id: "def", title: "Talk 2" };
+		video.dispatchEvent(new Event("loadedmetadata"));
+		vi.advanceTimersByTime(5000);
+
+		expect(video.playbackRate).toBe(3);
+	});
+
+	it("does not use the previous video's music title after navigation", () => {
+		renderTitle("【歌枠】Sing");
+		const { player, video } = stubWatchPlayer({
+			videoId: "abc",
+			title: "【歌枠】Sing",
+			duration: 3600,
+		});
+		loadScript();
+		expect(video.playbackRate).toBe(1);
+
+		// The page title still shows the music video, but the player has
+		// already loaded the next one.
+		player.videoData = { video_id: "def", title: "Talk" };
+		navigate("/watch?v=def");
+		video.dispatchEvent(new Event("loadedmetadata"));
+		vi.advanceTimersByTime(5000);
+
+		expect(video.playbackRate).toBe(3);
+	});
+
+	it("keeps a rate the user chose in YouTube's menu while paused", () => {
+		const { video } = stubWatchPlayer({
+			videoId: "abc",
+			title: "Talk",
+			duration: 1200,
+		});
+		loadScript();
+
+		setPaused(video, true);
+		video.playbackRate = 2;
+		vi.advanceTimersByTime(500);
+		setPaused(video, false);
+		video.dispatchEvent(new Event("play"));
+		vi.advanceTimersByTime(5000);
+
+		expect(video.playbackRate).toBe(2);
+	});
+
+	it("keeps a rate the user chose during a live stream", () => {
+		const { video } = stubWatchPlayer({
+			videoId: "abc",
+			title: "Live",
+			duration: Number.POSITIVE_INFINITY,
+		});
+		loadScript();
+
+		video.playbackRate = 1.5;
+		vi.advanceTimersByTime(500);
+		video.dispatchEvent(new Event("play"));
+		vi.advanceTimersByTime(5000);
+
+		expect(video.playbackRate).toBe(1.5);
+	});
+
+	it("keeps a clicked rate until the next video", () => {
+		const { player, video } = stubWatchPlayer({
+			videoId: "abc",
+			title: "Talk",
+			duration: 1200,
+		});
+		loadScript();
+
+		button("x2.5").click();
+		video.dispatchEvent(new Event("durationchange"));
+		vi.advanceTimersByTime(5000);
+		expect(video.playbackRate).toBe(2.5);
+
+		player.videoData = { video_id: "def", title: "Talk 2" };
+		navigate("/watch?v=def");
+		vi.advanceTimersByTime(5000);
+		expect(video.playbackRate).toBe(3);
 	});
 });
 
@@ -547,6 +837,146 @@ describe("timestamps", () => {
 		window.dispatchEvent(new Event("yt-navigate-finish"));
 
 		expect(timestampsButton().hidden).toBe(false);
+	});
+
+	it("uses the time column, not a time-like song title, in a tab-separated line", async () => {
+		stubInnertube([
+			[
+				"1\t4:33\tJohn Cage\t0:10:21",
+				"2\tSong B\tArtist\t0:17:27",
+				"3\tSong C\tArtist\t0:24:32",
+			].join("\n"),
+		]);
+		loadScript();
+		await vi.waitFor(() => expect(timestampsButton().hidden).toBe(false));
+		timestampsButton().click();
+
+		expect(timestampLabels()).toEqual([
+			"0:10:21 4:33 / John Cage",
+			"0:17:27 Song B / Artist",
+			"0:24:32 Song C / Artist",
+		]);
+	});
+
+	it("does not treat out-of-range minutes or seconds as timestamps", async () => {
+		const fetchMock = stubInnertube(["1:75 a\n1:99 b\n1:61:00 c"]);
+
+		loadScript();
+
+		await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+		await vi.advanceTimersByTimeAsync(100);
+		expect(timestampsButton().hidden).toBe(true);
+	});
+
+	it("follows a view-model continuation to the next page", async () => {
+		const fetchMock = vi.fn(async (_url, init) => {
+			const body = JSON.parse(init.body);
+			if (!body.continuation) return okResponse(nextResponse());
+			if (body.continuation === "PAGE_2") {
+				return okResponse(commentsResponse([SETLIST_COMMENT]));
+			}
+			const page1 = commentsResponse(["楽しかった"]);
+			page1.onResponseReceivedEndpoints[0].reloadContinuationItemsCommand.continuationItems.push(
+				{
+					continuationItemViewModel: {
+						continuationCommand: {
+							innertubeCommand: { continuationCommand: { token: "PAGE_2" } },
+						},
+					},
+				},
+			);
+			return okResponse(page1);
+		});
+		vi.stubGlobal("fetch", fetchMock);
+
+		loadScript();
+
+		await vi.waitFor(() => expect(timestampsButton().hidden).toBe(false));
+		expect(requestedTokens(fetchMock)).toEqual(["COMMENTS_TOKEN", "PAGE_2"]);
+	});
+
+	it("ignores an older request for the same video after navigating back", async () => {
+		let releaseFirst;
+		const firstHeld = new Promise((resolve) => {
+			releaseFirst = resolve;
+		});
+		let commentRequests = 0;
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (_url, init) => {
+				const body = JSON.parse(init.body);
+				if (!body.continuation) return okResponse(nextResponse());
+				commentRequests++;
+				if (commentRequests === 1) {
+					await firstHeld;
+					return okResponse(
+						commentsResponse(["0:01:00 old\n0:02:00 old\n0:03:00 old"]),
+					);
+				}
+				return okResponse(commentsResponse([SETLIST_COMMENT]));
+			}),
+		);
+		loadScript();
+		navigate("/watch?v=def");
+		navigate("/watch?v=abc");
+		await vi.waitFor(() => expect(timestampsButton().hidden).toBe(false));
+
+		releaseFirst();
+		await vi.advanceTimersByTimeAsync(100);
+		timestampsButton().click();
+
+		expect(timestampLabels()[0]).toBe("00:09:18 START");
+	});
+
+	it("tries again on the next navigation after a failed request", async () => {
+		let fail = true;
+		const fetchMock = vi.fn(async (_url, init) => {
+			if (fail) return { ok: false, status: 503, json: async () => ({}) };
+			const body = JSON.parse(init.body);
+			return okResponse(
+				body.continuation
+					? commentsResponse([SETLIST_COMMENT])
+					: nextResponse(),
+			);
+		});
+		vi.stubGlobal("fetch", fetchMock);
+		vi.spyOn(console, "warn").mockImplementation(() => {});
+		loadScript();
+		await vi.waitFor(() => expect(console.warn).toHaveBeenCalled());
+
+		fail = false;
+		window.dispatchEvent(new Event("yt-navigate-finish"));
+
+		await vi.waitFor(() => expect(timestampsButton().hidden).toBe(false));
+	});
+
+	it("creates the buttons when the logo appears later", async () => {
+		document.body.innerHTML = "";
+		stubInnertube([]);
+		loadScript();
+		expect(button("x3.0")).toBeUndefined();
+
+		document.body.innerHTML = '<div><a id="logo"></a></div>';
+		await vi.advanceTimersByTimeAsync(0);
+
+		expect(button("x3.0")).toBeDefined();
+	});
+
+	it("puts a source line in the problem detail even without a stack", async () => {
+		const err = new Error("Network offline");
+		err.stack = undefined;
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () => {
+				throw err;
+			}),
+		);
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+		loadScript();
+
+		await vi.waitFor(() => expect(warn).toHaveBeenCalled());
+		expect(warn.mock.calls[0][0].detail).toMatch(/^\S+:\d+: Network offline$/);
 	});
 
 	it("reports a failed request as an RFC 9457 problem", async () => {

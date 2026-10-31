@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Auto Speed
 // @namespace    https://github.com/oooooooo/youtube-auto-speed
-// @version      1.4.0
+// @version      1.4.1
 // @description  Speeds up videos except for music. You can also adjust the speed manually.
 // @author       ooooooooo
 // @match        https://www.youtube.com/*
@@ -36,11 +36,15 @@
 	const MAX_COMMENT_PAGES = 5;
 	// Setlist comments put the time at the start ("00:22:32 Song / Artist") or
 	// in a tab-separated column ("1\tSong\tArtist\t0:10:21").
-	const TIMESTAMP_RE = /(?<![\d:])((?:\d{1,2}:)?\d{1,2}:\d{2})(?![\d:])/;
+	// Minutes and seconds must be below 60, except for minutes without hours
+	// ("75:30"), which some viewers write for long streams.
+	const TIMESTAMP_RE =
+		/(?<![\d:])((?:\d{1,2}:[0-5]\d|\d{1,3}):[0-5]\d)(?![\d:])/;
 	const TRACK_NUMBER_RE = /^\d+[.)]?$/;
 	// Viewers often post just the start time ("0:17") as a comment.
 	const TIMESTAMP_ONLY_RE = new RegExp(`^${TIMESTAMP_RE.source}$`);
 	// Used only when the page has no ytcfg, e.g. before YouTube finishes booting.
+	const SOURCE_LOCATION_RE = /([^\s()/]+:\d+):\d+/;
 	const FALLBACK_INNERTUBE_CONTEXT = {
 		client: { clientName: "WEB", clientVersion: "2.20261029.11.00" },
 	};
@@ -49,9 +53,14 @@
 	let currentRate = defaultRate;
 	let manualOverride = false;
 	let enforceUntil = 0;
+	// True from a navigation until the auto rate for the new video is chosen.
+	// Rate changes in that window come from YouTube loading the video.
+	let autoPending = false;
+	let autoTimer = null;
 	let lastVideoId = null;
 	let observer = null;
 	let timestampsVideoId = null;
+	let timestampsRequest = 0;
 	let timestampEntries = [];
 	const hooked = new WeakSet();
 
@@ -151,8 +160,30 @@
 		return null;
 	}
 
+	// On Shorts the watch player stays in the page, hidden, so the Shorts
+	// player is looked up first there.
+	function mainVideo() {
+		const selector = isShorts()
+			? "#shorts-player video"
+			: "#movie_player video";
+		return document.querySelector(selector) ?? document.querySelector("video");
+	}
+
+	// The player API knows which video it has loaded, unlike the page title,
+	// which can still show the previous video right after navigation.
+	function loadedVideoInfo() {
+		const player = document.getElementById("movie_player");
+		const data = player?.getVideoData?.();
+		if (!data?.video_id || data.video_id !== getVideoId()) return null;
+		const duration = player.getDuration?.();
+		return {
+			title: data.title ?? "",
+			duration: duration > 0 ? duration : null,
+		};
+	}
+
 	function durationSecondsTrusted() {
-		const v = document.querySelector("ytd-player video.video-stream, video");
+		const v = mainVideo();
 		if (v?.duration > 0) return v.duration;
 
 		const ui = parseDuration(
@@ -179,8 +210,7 @@
 		return "";
 	}
 
-	function isTitleSlow() {
-		const title = getWatchTitle();
+	function isMusicTitle(title) {
 		if (!title) return false;
 		const lower = title.toLowerCase();
 		if (KEYWORDS.some((k) => lower.includes(k.toLowerCase()))) return true;
@@ -192,39 +222,42 @@
 		return params.get("v") || location.pathname;
 	}
 
-	function computeAutoRate() {
+	// info comes from the player API; without it, fall back to the page.
+	function computeAutoRate(info) {
 		if (isShorts()) return defaultRate;
 
-		const titleSlow = isTitleSlow();
-		const sec = durationSecondsTrusted();
+		const title = info ? info.title : getWatchTitle();
+		const sec = info?.duration ?? durationSecondsTrusted();
 
-		if (titleSlow) return RATE_SLOW;
+		if (isMusicTitle(title)) return RATE_SLOW;
 		if (sec != null && sec <= MAX_SLOW_DURATION_SEC) return RATE_SLOW;
 		return defaultRate;
 	}
 
 	function autoSetSpeed(retryCount = 0) {
+		clearTimeout(autoTimer);
 		const videoId = getVideoId();
 		if (videoId !== lastVideoId) {
 			lastVideoId = videoId;
 			manualOverride = false;
+			autoPending = true;
 		}
 		if (manualOverride) return;
 
-		const titleSlow = isTitleSlow();
-		const titleReadyStrict = TITLE_SELECTORS.slice(0, 3).some((sel) =>
-			document.querySelector(sel)?.textContent?.trim(),
-		);
-
-		// Always retry up to 15 times: title element may still show the previous
-		// video's text at navigation time (titleReadyStrict=true but stale content).
-		if (!titleSlow && retryCount < AUTO_RETRY_COUNT) {
-			if (!titleReadyStrict) setPlaybackRate(defaultRate, false);
-			setTimeout(() => autoSetSpeed(retryCount + 1), AUTO_RETRY_INTERVAL_MS);
+		const info = isShorts() ? null : loadedVideoInfo();
+		// Wait until the player reports this video and its duration. If the
+		// player API never does, the page title is used after the retries.
+		const ready = isShorts() || info?.duration != null;
+		if (!ready && retryCount < AUTO_RETRY_COUNT) {
+			autoTimer = setTimeout(
+				() => autoSetSpeed(retryCount + 1),
+				AUTO_RETRY_INTERVAL_MS,
+			);
 			return;
 		}
 
-		setPlaybackRate(computeAutoRate(), false);
+		autoPending = false;
+		setPlaybackRate(computeAutoRate(info), false);
 	}
 
 	function syncVideosFromCurrentRate() {
@@ -244,7 +277,10 @@
 	}
 
 	function setPlaybackRate(rate, isManual = true) {
-		if (isManual) manualOverride = true;
+		if (isManual) {
+			manualOverride = true;
+			autoPending = false;
+		}
 		currentRate = rate;
 		enforceUntil = Date.now() + ENFORCE_MS;
 		syncVideosFromCurrentRate();
@@ -304,27 +340,39 @@
 		return text.split(":").reduce((sec, part) => sec * 60 + Number(part), 0);
 	}
 
-	function setlistTitle(rest) {
-		const fields = rest
-			.split("\t")
-			.map((f) => f.trim())
-			.filter(Boolean);
-		if (fields.length > 1 && TRACK_NUMBER_RE.test(fields[0])) fields.shift();
-		return fields.join(" / ");
+	function setlistTitle(fields) {
+		const rest = fields.filter(Boolean);
+		if (rest.length > 1 && TRACK_NUMBER_RE.test(rest[0])) rest.shift();
+		return rest.join(" / ");
+	}
+
+	// In a tab-separated line the song title can look like a time ("4:33"),
+	// so a time that fills the first or last column wins over one found
+	// elsewhere in the line.
+	function splitSetlistLine(line) {
+		const fields = line.split("\t").map((f) => f.trim());
+		for (const i of [0, fields.length - 1]) {
+			const m = fields[i].match(TIMESTAMP_ONLY_RE);
+			if (m) return { time: m[1], rest: fields.filter((_, j) => j !== i) };
+		}
+		const m = line.match(TIMESTAMP_RE);
+		if (!m) return null;
+		const rest = line.replace(TIMESTAMP_RE, "\t").split("\t");
+		return { time: m[1], rest: rest.map((f) => f.trim()) };
 	}
 
 	function parseSetlist(text) {
 		const entries = [];
 		for (const line of text.split(/\r?\n/)) {
-			const m = line.match(TIMESTAMP_RE);
-			if (!m) continue;
-			const seconds = parseTimestamp(m[1]);
+			const parts = splitSetlistLine(line);
+			if (!parts) continue;
+			const seconds = parseTimestamp(parts.time);
 			// 0:00 marks the waiting screen, not a song or the stream start.
 			if (seconds === 0) continue;
 			entries.push({
-				time: m[1],
+				time: parts.time,
 				seconds,
-				title: setlistTitle(line.replace(TIMESTAMP_RE, "\t")),
+				title: setlistTitle(parts.rest),
 			});
 		}
 		return entries;
@@ -404,16 +452,19 @@
 		return [start, ...setlist];
 	}
 
-	// Only top-level items are checked: each comment thread also holds a
-	// continuation token, but that one loads its replies.
+	// Only top-level continuation items are checked: comment threads hold the
+	// token for their replies, and the header holds the sort menu's tokens.
+	// The item comes as continuationItemRenderer or continuationItemViewModel.
 	function findNextPageToken(json) {
 		for (const endpoint of json.onResponseReceivedEndpoints ?? []) {
 			for (const action of Object.values(endpoint)) {
 				for (const item of action?.continuationItems ?? []) {
-					const token =
-						item.continuationItemRenderer?.continuationEndpoint
-							?.continuationCommand?.token;
-					if (token) return token;
+					const [kind] = Object.keys(item);
+					if (!kind?.startsWith("continuationItem")) continue;
+					for (const node of walk(item)) {
+						const token = node.continuationCommand?.token;
+						if (token) return token;
+					}
 				}
 			}
 		}
@@ -432,8 +483,11 @@
 	}
 
 	function reportProblem(title, err) {
+		// Some errors, such as Firefox's fetch failures, carry no stack, so the
+		// place that reports the problem is used instead.
 		const at =
-			err?.stack?.match(/([^\s()/]+:\d+):\d+/)?.[1] ??
+			err?.stack?.match(SOURCE_LOCATION_RE)?.[1] ??
+			new Error().stack?.match(SOURCE_LOCATION_RE)?.[1] ??
 			"youtube-auto-speed.user.js";
 		console.warn({
 			type: "about:blank",
@@ -484,32 +538,54 @@
 		const videoId = location.pathname === "/watch" ? getVideoId() : null;
 		if (videoId === timestampsVideoId) return;
 		timestampsVideoId = videoId;
+		const request = ++timestampsRequest;
 		setTimestamps([]);
 		if (!videoId) return;
 
 		try {
 			const texts = [];
 			for await (const pageTexts of fetchCommentPages(videoId)) {
-				// Stop if the user navigated to another video meanwhile.
-				if (timestampsVideoId !== videoId) return;
+				// Stop if another load started, even for the same video after
+				// navigating away and back.
+				if (request !== timestampsRequest) return;
 				texts.push(...pageTexts);
 				setTimestamps(pickTimestamps(texts));
 			}
 		} catch (err) {
+			if (request !== timestampsRequest) return;
+			// Forget the video so the next navigation event tries again.
+			timestampsVideoId = null;
 			reportProblem("Failed to load timestamps", err);
 		}
 	}
 
+	// YouTube resets the rate when it loads a video, so changes right after the
+	// script sets a rate are undone. Later changes on the main video come from
+	// the user, e.g. YouTube's speed menu, even while paused or live.
+	function onRateChange(e) {
+		const video = e.target;
+		if (Math.abs(video.playbackRate - currentRate) <= 0.001) return;
+		if (autoPending || Date.now() < enforceUntil) {
+			video.playbackRate = currentRate;
+			return;
+		}
+		if (video !== mainVideo()) return;
+		manualOverride = true;
+		currentRate = video.playbackRate;
+		updateButtonStates(currentRate);
+	}
+
 	function hookVideo(video) {
-		video.playbackRate = currentRate;
 		if (hooked.has(video)) return;
 		hooked.add(video);
+		video.playbackRate = currentRate;
+		video.addEventListener("ratechange", onRateChange);
 		const onMeta = () => autoSetSpeed();
 		video.addEventListener("loadedmetadata", onMeta);
 		video.addEventListener("durationchange", onMeta);
 	}
 
-	function observeVideos() {
+	function observePage() {
 		if (observer) return;
 		observer = new MutationObserver((mutations) => {
 			for (const m of mutations) {
@@ -520,6 +596,8 @@
 					}
 				}
 			}
+			// The masthead can be rendered, or re-rendered, after init.
+			if (!document.getElementById(CONTAINER_ID)) createButtons();
 		});
 		observer.observe(document.documentElement, {
 			childList: true,
@@ -530,29 +608,11 @@
 	function init() {
 		injectStyle();
 		createButtons();
-		observeVideos();
+		observePage();
 
 		for (const v of document.querySelectorAll("video")) hookVideo(v);
 
 		autoSetSpeed();
-
-		// YouTube が再生直後に倍速を戻すことがあるため、設定後 2 秒間だけ強制する
-		window.setInterval(() => {
-			const now = Date.now();
-			for (const v of document.querySelectorAll("video")) {
-				if (!Number.isFinite(v.duration) || v.paused || v.ended) continue;
-				if (Math.abs(v.playbackRate - currentRate) > 0.001) {
-					if (now < enforceUntil) {
-						v.playbackRate = currentRate;
-					} else {
-						// 強制期間外はユーザーの変更として受け入れる
-						manualOverride = true;
-						currentRate = v.playbackRate;
-						updateButtonStates(currentRate);
-					}
-				}
-			}
-		}, 450);
 
 		document.addEventListener(
 			"play",
