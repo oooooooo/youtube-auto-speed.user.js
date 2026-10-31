@@ -76,8 +76,32 @@ function nextResponse() {
 	};
 }
 
-function commentsResponse(texts) {
+function continuationItem(token) {
 	return {
+		continuationItemRenderer: {
+			continuationEndpoint: { continuationCommand: { token } },
+		},
+	};
+}
+
+// nextToken is the token for the next page of comments, or null on the last
+// page. Each thread also carries a replies token, which must not be followed.
+function commentsResponse(texts, nextToken = null) {
+	const threads = texts.map(() => ({
+		commentThreadRenderer: {
+			replies: { contents: [continuationItem("REPLIES_TOKEN")] },
+		},
+	}));
+	return {
+		onResponseReceivedEndpoints: [
+			{
+				reloadContinuationItemsCommand: {
+					continuationItems: nextToken
+						? [...threads, continuationItem(nextToken)]
+						: threads,
+				},
+			},
+		],
 		frameworkUpdates: {
 			entityBatchUpdate: {
 				mutations: texts.map((content) => ({
@@ -91,15 +115,39 @@ function commentsResponse(texts) {
 }
 
 function stubInnertube(commentTexts) {
+	return stubInnertubePages([commentTexts]);
+}
+
+// pages[i] holds the comment texts of page i + 1. Page n is requested with
+// the token "COMMENTS_TOKEN" for n = 1 and "PAGE_<n>" after that.
+// held maps a page number to a promise that the response waits for, so a
+// test can look at the page before that comment page arrives.
+function stubInnertubePages(pages, { endless = false, held = {} } = {}) {
 	const fetchMock = vi.fn(async (_url, init) => {
 		const body = JSON.parse(init.body);
-		const json = body.continuation
-			? commentsResponse(commentTexts)
-			: nextResponse();
+		let json = nextResponse();
+		if (body.continuation) {
+			const page =
+				body.continuation === "COMMENTS_TOKEN"
+					? 1
+					: Number(body.continuation.replace("PAGE_", ""));
+			await held[page];
+			const hasNext = endless || page < pages.length;
+			json = commentsResponse(
+				pages[page - 1] ?? [],
+				hasNext ? `PAGE_${page + 1}` : null,
+			);
+		}
 		return { ok: true, status: 200, json: async () => json };
 	});
 	vi.stubGlobal("fetch", fetchMock);
 	return fetchMock;
+}
+
+function requestedTokens(fetchMock) {
+	return fetchMock.mock.calls
+		.map(([, init]) => JSON.parse(init.body).continuation)
+		.filter(Boolean);
 }
 
 function startButton() {
@@ -398,6 +446,73 @@ describe("setlist", () => {
 		startButton().click();
 
 		expect(player.seekTo).toHaveBeenCalledWith(5 * 60, true);
+	});
+
+	it("finds a setlist on a later page of comments", async () => {
+		const fetchMock = stubInnertubePages([
+			["配信お疲れ様でした"],
+			["楽しかった"],
+			[SETLIST_COMMENT],
+		]);
+
+		loadScript();
+
+		await vi.waitFor(() => expect(setlistButton().hidden).toBe(false));
+		expect(requestedTokens(fetchMock)).toEqual([
+			"COMMENTS_TOKEN",
+			"PAGE_2",
+			"PAGE_3",
+		]);
+	});
+
+	it("shows the buttons from the first page before later pages arrive", async () => {
+		stubInnertubePages([[SETLIST_COMMENT], ["楽しかった"]], {
+			held: { 2: new Promise(() => {}) },
+		});
+
+		loadScript();
+
+		await vi.waitFor(() => expect(setlistButton().hidden).toBe(false));
+		expect(startButton().hidden).toBe(false);
+	});
+
+	it("updates the open list when a later page has a longer setlist", async () => {
+		let releasePage2;
+		const page2 = new Promise((resolve) => {
+			releasePage2 = resolve;
+		});
+		stubInnertubePages(
+			[["0:01:00 a\n0:02:00 b\n0:03:00 c"], [SETLIST_COMMENT]],
+			{ held: { 2: page2 } },
+		);
+		const player = stubPlayer();
+		loadScript();
+		await vi.waitFor(() => expect(setlistButton().hidden).toBe(false));
+		setlistButton().click();
+		expect(setlistRows()).toHaveLength(3);
+
+		releasePage2();
+
+		await vi.waitFor(() => expect(setlistRows()).toHaveLength(4));
+		expect(setlistPanelOpen()).toBe(true);
+		startButton().click();
+		expect(player.seekTo).toHaveBeenCalledWith(9 * 60 + 18, true);
+	});
+
+	it("stops after five pages of comments", async () => {
+		const fetchMock = stubInnertubePages([], { endless: true });
+
+		loadScript();
+
+		await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(6));
+		await vi.advanceTimersByTimeAsync(100);
+		expect(requestedTokens(fetchMock)).toEqual([
+			"COMMENTS_TOKEN",
+			"PAGE_2",
+			"PAGE_3",
+			"PAGE_4",
+			"PAGE_5",
+		]);
 	});
 
 	it("seeks to the clicked time and closes the list", async () => {

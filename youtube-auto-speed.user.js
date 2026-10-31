@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Auto Speed
 // @namespace    https://github.com/oooooooo/youtube-auto-speed
-// @version      1.3.0
+// @version      1.3.1
 // @description  Speeds up videos except for music. You can also adjust the speed manually.
 // @author       ooooooooo
 // @match        https://www.youtube.com/*
@@ -32,6 +32,9 @@
 	const SETLIST_BTN_ID = "yt-speed-setlist-btn";
 	const SETLIST_PANEL_ID = "yt-speed-setlist-panel";
 	const MIN_SETLIST_ENTRIES = 3;
+	// Top comments come back in a slightly different order on every request,
+	// so the setlist is not always on the first page.
+	const MAX_COMMENT_PAGES = 5;
 	// Setlist comments put the time at the start ("00:22:32 Song / Artist") or
 	// in a tab-separated column ("1\tSong\tArtist\t0:10:21").
 	const TIMESTAMP_RE = /(?<![\d:])((?:\d{1,2}:)?\d{1,2}:\d{2})(?![\d:])/;
@@ -401,10 +404,31 @@
 		return seconds;
 	}
 
-	async function fetchCommentTexts(videoId) {
-		const token = findCommentsToken(await innertubeNext({ videoId }));
-		if (!token) return [];
-		return commentTexts(await innertubeNext({ continuation: token }));
+	// Only top-level items are checked: each comment thread also holds a
+	// continuation token, but that one loads its replies.
+	function findNextPageToken(json) {
+		for (const endpoint of json.onResponseReceivedEndpoints ?? []) {
+			for (const action of Object.values(endpoint)) {
+				for (const item of action?.continuationItems ?? []) {
+					const token =
+						item.continuationItemRenderer?.continuationEndpoint
+							?.continuationCommand?.token;
+					if (token) return token;
+				}
+			}
+		}
+		return null;
+	}
+
+	// Yields the comment texts page by page so the buttons can show up as soon
+	// as the first page arrives.
+	async function* fetchCommentPages(videoId) {
+		let token = findCommentsToken(await innertubeNext({ videoId }));
+		for (let page = 0; token && page < MAX_COMMENT_PAGES; page++) {
+			const json = await innertubeNext({ continuation: token });
+			yield commentTexts(json);
+			token = findNextPageToken(json);
+		}
 	}
 
 	function reportProblem(title, err) {
@@ -447,7 +471,8 @@
 		const panel = document.getElementById(SETLIST_PANEL_ID);
 		if (!startBtn || !btn || !panel) return;
 
-		panel.hidden = true;
+		// Keep the list open while later pages refine it.
+		if (setlistEntries.length === 0) panel.hidden = true;
 		panel.replaceChildren(
 			...setlistEntries.map((entry) => {
 				const row = document.createElement("button");
@@ -473,9 +498,11 @@
 		if (!videoId) return;
 
 		try {
-			const texts = await fetchCommentTexts(videoId);
-			// Drop the result if the user navigated to another video meanwhile.
-			if (setlistVideoId === videoId) {
+			const texts = [];
+			for await (const pageTexts of fetchCommentPages(videoId)) {
+				// Stop if the user navigated to another video meanwhile.
+				if (setlistVideoId !== videoId) return;
+				texts.push(...pageTexts);
 				setSetlist(pickSetlist(texts), pickStartCandidates(texts));
 			}
 		} catch (err) {

@@ -46,8 +46,8 @@ The default is remembered across visits and its button is underlined.
 
 ### Setlist
 
-When a top comment has three or more lines with a timestamp,
-a `SET LIST` button appears next to the speed buttons.
+When one of the top 100 or so comments has three or more lines with a
+timestamp, a `SET LIST` button appears next to the speed buttons.
 The timestamp can be at the start of the line (`00:22:32 Song / Artist`)
 or in a tab-separated column (`1  Song  Artist  0:10:21`).
 Lines at `0:00` are ignored because they usually mark the waiting screen.
