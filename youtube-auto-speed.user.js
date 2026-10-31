@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Auto Speed
 // @namespace    https://github.com/oooooooo/youtube-auto-speed
-// @version      1.0.6
+// @version      1.0.8
 // @description  Speeds up videos except for music. You can also adjust the speed manually.
 // @author       ooooooooo
 // @match        https://www.youtube.com/*
@@ -21,9 +21,13 @@
 	const RATE_FAST = 2.7;
 	const CONTAINER_ID = "yt-speed-buttons-container-v4";
 	const BTN_CLASS = "yt-speed-btn-v5";
+	const AUTO_RETRY_COUNT = 15;
+	const AUTO_RETRY_INTERVAL_MS = 120;
+	const ENFORCE_MS = 2000;
 
 	let currentRate = RATE_FAST;
 	let manualOverride = false;
+	let enforceUntil = 0;
 	let lastVideoId = null;
 	let observer = null;
 	const hooked = new WeakSet();
@@ -140,9 +144,11 @@
 			document.querySelector(sel)?.textContent?.trim(),
 		);
 
-		if (!titleSlow && retryCount < 15 && !titleReadyStrict) {
-			setPlaybackRate(RATE_FAST, false);
-			setTimeout(() => autoSetSpeed(retryCount + 1), 120);
+		// Always retry up to 15 times: title element may still show the previous
+		// video's text at navigation time (titleReadyStrict=true but stale content).
+		if (!titleSlow && retryCount < AUTO_RETRY_COUNT) {
+			if (!titleReadyStrict) setPlaybackRate(RATE_FAST, false);
+			setTimeout(() => autoSetSpeed(retryCount + 1), AUTO_RETRY_INTERVAL_MS);
 			return;
 		}
 
@@ -157,15 +163,19 @@
 		}
 	}
 
-	function setPlaybackRate(rate, isManual = true) {
-		if (isManual) manualOverride = true;
-		currentRate = rate;
-		syncVideosFromCurrentRate();
-		queueMicrotask(syncVideosFromCurrentRate);
-
+	function updateButtonStates(rate) {
 		for (const b of document.querySelectorAll(`.${BTN_CLASS}`)) {
 			b.classList.toggle("active", Number.parseFloat(b.dataset.rate) === rate);
 		}
+	}
+
+	function setPlaybackRate(rate, isManual = true) {
+		if (isManual) manualOverride = true;
+		currentRate = rate;
+		enforceUntil = Date.now() + ENFORCE_MS;
+		syncVideosFromCurrentRate();
+		queueMicrotask(syncVideosFromCurrentRate);
+		updateButtonStates(rate);
 	}
 
 	function createButtons() {
@@ -229,12 +239,20 @@
 
 		autoSetSpeed();
 
-		// YouTube が再生直後に倍速を戻すことがあるため、一定間隔でだけ合わせる
+		// YouTube が再生直後に倍速を戻すことがあるため、設定後 2 秒間だけ強制する
 		window.setInterval(() => {
+			const now = Date.now();
 			for (const v of document.querySelectorAll("video")) {
 				if (!Number.isFinite(v.duration) || v.paused || v.ended) continue;
 				if (Math.abs(v.playbackRate - currentRate) > 0.001) {
-					v.playbackRate = currentRate;
+					if (now < enforceUntil) {
+						v.playbackRate = currentRate;
+					} else {
+						// 強制期間外はユーザーの変更として受け入れる
+						manualOverride = true;
+						currentRate = v.playbackRate;
+						updateButtonStates(currentRate);
+					}
 				}
 			}
 		}, 450);
