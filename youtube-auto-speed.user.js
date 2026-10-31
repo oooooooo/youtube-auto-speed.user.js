@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Auto Speed
 // @namespace    https://github.com/oooooooo/youtube-auto-speed
-// @version      1.0.8
+// @version      1.1.0
 // @description  Speeds up videos except for music. You can also adjust the speed manually.
 // @author       ooooooooo
 // @match        https://www.youtube.com/*
@@ -21,13 +21,16 @@
 	const RATE_MID = 2.5;
 	const RATE_FAST = 3.0;
 	const RATE_FASTER = 3.5;
+	const BUTTON_RATES = [RATE_SLOW, RATE_MID, RATE_FAST, RATE_FASTER];
+	const STORAGE_KEY = "yt-auto-speed-default-rate";
 	const CONTAINER_ID = "yt-speed-buttons-container-v4";
 	const BTN_CLASS = "yt-speed-btn-v5";
 	const AUTO_RETRY_COUNT = 15;
 	const AUTO_RETRY_INTERVAL_MS = 120;
 	const ENFORCE_MS = 2000;
 
-	let currentRate = RATE_FAST;
+	let defaultRate = loadDefaultRate();
+	let currentRate = defaultRate;
 	let manualOverride = false;
 	let enforceUntil = 0;
 	let lastVideoId = null;
@@ -58,7 +61,27 @@
       border-color: rgba(255,255,255,0.25);
       font-weight: bold;
     }
+    .${BTN_CLASS}.default { text-decoration: underline; }
   `;
+
+	function loadDefaultRate() {
+		try {
+			const rate = Number.parseFloat(localStorage.getItem(STORAGE_KEY));
+			if (BUTTON_RATES.includes(rate)) return rate;
+		} catch {
+			// localStorage can be blocked; fall back to the built-in default.
+		}
+		return RATE_FAST;
+	}
+
+	function saveDefaultRate(rate) {
+		defaultRate = rate;
+		try {
+			localStorage.setItem(STORAGE_KEY, String(rate));
+		} catch {
+			// Keep the default for this page even if it cannot be persisted.
+		}
+	}
 
 	function injectStyle() {
 		if (!document.getElementById("yt-speed-buttons-style")) {
@@ -123,14 +146,14 @@
 	}
 
 	function computeAutoRate() {
-		if (isShorts()) return RATE_FAST;
+		if (isShorts()) return defaultRate;
 
 		const titleSlow = isTitleSlow();
 		const sec = durationSecondsTrusted();
 
 		if (titleSlow) return RATE_SLOW;
 		if (sec != null && sec <= MAX_SLOW_DURATION_SEC) return RATE_SLOW;
-		return RATE_FAST;
+		return defaultRate;
 	}
 
 	function autoSetSpeed(retryCount = 0) {
@@ -149,7 +172,7 @@
 		// Always retry up to 15 times: title element may still show the previous
 		// video's text at navigation time (titleReadyStrict=true but stale content).
 		if (!titleSlow && retryCount < AUTO_RETRY_COUNT) {
-			if (!titleReadyStrict) setPlaybackRate(RATE_FAST, false);
+			if (!titleReadyStrict) setPlaybackRate(defaultRate, false);
 			setTimeout(() => autoSetSpeed(retryCount + 1), AUTO_RETRY_INTERVAL_MS);
 			return;
 		}
@@ -167,7 +190,9 @@
 
 	function updateButtonStates(rate) {
 		for (const b of document.querySelectorAll(`.${BTN_CLASS}`)) {
-			b.classList.toggle("active", Number.parseFloat(b.dataset.rate) === rate);
+			const r = Number.parseFloat(b.dataset.rate);
+			b.classList.toggle("active", r === rate);
+			b.classList.toggle("default", r === defaultRate);
 		}
 	}
 
@@ -192,16 +217,20 @@
 		function mk(label, rate) {
 			const b = document.createElement("button");
 			b.className = BTN_CLASS;
-			b.innerText = label;
+			b.textContent = label;
 			b.dataset.rate = String(rate);
 			b.onclick = () => setPlaybackRate(rate);
+			b.oncontextmenu = (e) => {
+				e.preventDefault();
+				saveDefaultRate(rate);
+				setPlaybackRate(rate);
+			};
 			return b;
 		}
 
-		container.appendChild(mk(`x${RATE_SLOW.toFixed(1)}`, RATE_SLOW));
-		container.appendChild(mk(`x${RATE_MID.toFixed(1)}`, RATE_MID));
-		container.appendChild(mk(`x${RATE_FAST.toFixed(1)}`, RATE_FAST));
-		container.appendChild(mk(`x${RATE_FASTER.toFixed(1)}`, RATE_FASTER));
+		for (const rate of BUTTON_RATES) {
+			container.appendChild(mk(`x${rate.toFixed(1)}`, rate));
+		}
 
 		logo.parentElement.insertBefore(container, logo.nextSibling);
 		setPlaybackRate(currentRate, false);
