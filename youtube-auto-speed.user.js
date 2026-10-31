@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Auto Speed
 // @namespace    https://github.com/oooooooo/youtube-auto-speed
-// @version      1.1.0
+// @version      1.2.0
 // @description  Speeds up videos except for music. You can also adjust the speed manually.
 // @author       ooooooooo
 // @match        https://www.youtube.com/*
@@ -28,6 +28,14 @@
 	const AUTO_RETRY_COUNT = 15;
 	const AUTO_RETRY_INTERVAL_MS = 120;
 	const ENFORCE_MS = 2000;
+	const SETLIST_BTN_ID = "yt-speed-setlist-btn";
+	const SETLIST_PANEL_ID = "yt-speed-setlist-panel";
+	const MIN_SETLIST_ENTRIES = 3;
+	const SETLIST_LINE_RE = /^\s*((?:\d{1,2}:)?\d{1,2}:\d{2})\s*(.*)$/;
+	// Used only when the page has no ytcfg, e.g. before YouTube finishes booting.
+	const FALLBACK_INNERTUBE_CONTEXT = {
+		client: { clientName: "WEB", clientVersion: "2.20261029.11.00" },
+	};
 
 	let defaultRate = loadDefaultRate();
 	let currentRate = defaultRate;
@@ -35,6 +43,8 @@
 	let enforceUntil = 0;
 	let lastVideoId = null;
 	let observer = null;
+	let setlistVideoId = null;
+	let setlistEntries = [];
 	const hooked = new WeakSet();
 
 	const style = `
@@ -62,6 +72,35 @@
       font-weight: bold;
     }
     .${BTN_CLASS}.default { text-decoration: underline; }
+    #${CONTAINER_ID} { position: relative; }
+    #${SETLIST_PANEL_ID} {
+      position: absolute;
+      top: calc(100% + 6px);
+      left: 0;
+      z-index: 9999;
+      min-width: 280px;
+      max-height: 70vh;
+      overflow-y: auto;
+      padding: 6px;
+      border-radius: 12px;
+      background: #212121;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+    }
+    #${SETLIST_PANEL_ID}[hidden] { display: none; }
+    #${SETLIST_PANEL_ID} button {
+      display: block;
+      width: 100%;
+      padding: 6px 8px;
+      border: none;
+      border-radius: 8px;
+      background: transparent;
+      color: #fff;
+      font-family: "Roboto", Arial, sans-serif;
+      font-size: 13px;
+      text-align: left;
+      cursor: pointer;
+    }
+    #${SETLIST_PANEL_ID} button:hover { background: rgba(255,255,255,0.15); }
   `;
 
 	function loadDefaultRate() {
@@ -232,8 +271,166 @@
 			container.appendChild(mk(`x${rate.toFixed(1)}`, rate));
 		}
 
+		const setlistBtn = document.createElement("button");
+		setlistBtn.id = SETLIST_BTN_ID;
+		setlistBtn.className = BTN_CLASS;
+		setlistBtn.textContent = "SET LIST";
+		setlistBtn.hidden = true;
+		setlistBtn.onclick = () => {
+			const panel = document.getElementById(SETLIST_PANEL_ID);
+			panel.hidden = !panel.hidden;
+		};
+		container.appendChild(setlistBtn);
+
+		const panel = document.createElement("div");
+		panel.id = SETLIST_PANEL_ID;
+		panel.hidden = true;
+		container.appendChild(panel);
+
 		logo.parentElement.insertBefore(container, logo.nextSibling);
+		renderSetlist();
 		setPlaybackRate(currentRate, false);
+	}
+
+	function parseTimestamp(text) {
+		return text.split(":").reduce((sec, part) => sec * 60 + Number(part), 0);
+	}
+
+	function parseSetlist(text) {
+		const entries = [];
+		for (const line of text.split(/\r?\n/)) {
+			const m = line.match(SETLIST_LINE_RE);
+			if (m) {
+				entries.push({
+					time: m[1],
+					seconds: parseTimestamp(m[1]),
+					title: m[2].trim(),
+				});
+			}
+		}
+		return entries;
+	}
+
+	function pickSetlist(commentTexts) {
+		let best = [];
+		for (const text of commentTexts) {
+			const entries = parseSetlist(text);
+			if (entries.length > best.length) best = entries;
+		}
+		return best.length >= MIN_SETLIST_ENTRIES ? best : [];
+	}
+
+	function* walk(node) {
+		if (node == null || typeof node !== "object") return;
+		yield node;
+		for (const child of Object.values(node)) yield* walk(child);
+	}
+
+	function findCommentsToken(json) {
+		for (const node of walk(json)) {
+			if (node.sectionIdentifier !== "comment-item-section") continue;
+			for (const inner of walk(node)) {
+				const token = inner.continuationCommand?.token;
+				if (token) return token;
+			}
+		}
+		return null;
+	}
+
+	function commentTexts(json) {
+		const texts = [];
+		for (const node of walk(json)) {
+			const text = node.commentEntityPayload?.properties?.content?.content;
+			if (text) texts.push(text);
+		}
+		return texts;
+	}
+
+	// Uses YouTube's internal API because comments are loaded lazily and are
+	// not in the DOM until the user scrolls down to them.
+	async function innertubeNext(body) {
+		const url = "/youtubei/v1/next?prettyPrint=false";
+		const context =
+			window.ytcfg?.get?.("INNERTUBE_CONTEXT") ?? FALLBACK_INNERTUBE_CONTEXT;
+		const res = await fetch(url, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ context, ...body }),
+		});
+		if (!res.ok) throw new Error(`HTTP ${res.status} from ${url}`);
+		return res.json();
+	}
+
+	async function fetchSetlist(videoId) {
+		const token = findCommentsToken(await innertubeNext({ videoId }));
+		if (!token) return [];
+		return pickSetlist(
+			commentTexts(await innertubeNext({ continuation: token })),
+		);
+	}
+
+	function reportProblem(title, err) {
+		const at =
+			err?.stack?.match(/([^\s()/]+:\d+):\d+/)?.[1] ??
+			"youtube-auto-speed.user.js";
+		console.warn({
+			type: "about:blank",
+			title,
+			detail: `${at}: ${err?.message ?? err}`,
+		});
+	}
+
+	function seekTo(seconds) {
+		const player = document.getElementById("movie_player");
+		if (typeof player?.seekTo === "function") {
+			player.seekTo(seconds, true);
+			return;
+		}
+		const v = document.querySelector("ytd-player video.video-stream, video");
+		if (v) v.currentTime = seconds;
+	}
+
+	function setSetlist(entries) {
+		setlistEntries = entries;
+		renderSetlist();
+	}
+
+	function renderSetlist() {
+		const btn = document.getElementById(SETLIST_BTN_ID);
+		const panel = document.getElementById(SETLIST_PANEL_ID);
+		if (!btn || !panel) return;
+
+		panel.hidden = true;
+		panel.replaceChildren(
+			...setlistEntries.map((entry) => {
+				const row = document.createElement("button");
+				row.textContent = entry.title
+					? `${entry.time} ${entry.title}`
+					: entry.time;
+				row.onclick = () => {
+					seekTo(entry.seconds);
+					panel.hidden = true;
+				};
+				return row;
+			}),
+		);
+		btn.hidden = setlistEntries.length === 0;
+	}
+
+	async function loadSetlist() {
+		const videoId = location.pathname === "/watch" ? getVideoId() : null;
+		if (videoId === setlistVideoId) return;
+		setlistVideoId = videoId;
+		setSetlist([]);
+		if (!videoId) return;
+
+		try {
+			const entries = await fetchSetlist(videoId);
+			// Drop the result if the user navigated to another video meanwhile.
+			if (setlistVideoId === videoId) setSetlist(entries);
+		} catch (err) {
+			reportProblem("Failed to load setlist", err);
+		}
 	}
 
 	function hookVideo(video) {
@@ -299,9 +496,20 @@
 			true,
 		);
 
+		document.addEventListener("click", (e) => {
+			const panel = document.getElementById(SETLIST_PANEL_ID);
+			if (!panel || panel.hidden) return;
+			if (panel.contains(e.target)) return;
+			if (document.getElementById(SETLIST_BTN_ID)?.contains(e.target)) return;
+			panel.hidden = true;
+		});
+
+		loadSetlist();
+
 		window.addEventListener("yt-navigate-finish", () => {
 			createButtons();
 			autoSetSpeed();
+			loadSetlist();
 		});
 	}
 

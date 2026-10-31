@@ -7,6 +7,7 @@ A userscript that automatically plays YouTube videos at high speed, except for m
 - **Fast playback (3.0x by default)** for regular videos
 - **Normal playback (1.0x)** for music content
 - **Manual override buttons** in the YouTube header for quick speed adjustment
+- **Setlist button** that lists the timestamps from a setlist comment
 
 ## How It Works
 
@@ -41,6 +42,17 @@ Click them to manually adjust the playback speed when needed.
 
 Right-click a button to make its speed the default.
 The default is remembered across visits and its button is underlined.
+
+### Setlist
+
+When a top comment has three or more lines starting with a timestamp
+(e.g. `00:22:32 都落ち / ヨルシカ`), a `SET LIST` button appears next to the
+speed buttons. The comment with the most timestamps is used.
+Click the button to open the list, and click a line to jump to that time
+and close the list.
+
+The comments are fetched from YouTube's internal API,
+so this feature may stop working if YouTube changes it.
 
 ## Installation
 
