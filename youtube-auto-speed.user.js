@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Auto Speed
 // @namespace    https://github.com/oooooooo/youtube-auto-speed
-// @version      1.2.0
+// @version      1.2.1
 // @description  Speeds up videos except for music. You can also adjust the speed manually.
 // @author       ooooooooo
 // @match        https://www.youtube.com/*
@@ -31,7 +31,10 @@
 	const SETLIST_BTN_ID = "yt-speed-setlist-btn";
 	const SETLIST_PANEL_ID = "yt-speed-setlist-panel";
 	const MIN_SETLIST_ENTRIES = 3;
-	const SETLIST_LINE_RE = /^\s*((?:\d{1,2}:)?\d{1,2}:\d{2})\s*(.*)$/;
+	// Setlist comments put the time at the start ("00:22:32 Song / Artist") or
+	// in a tab-separated column ("1\tSong\tArtist\t0:10:21").
+	const TIMESTAMP_RE = /(?<![\d:])((?:\d{1,2}:)?\d{1,2}:\d{2})(?![\d:])/;
+	const TRACK_NUMBER_RE = /^\d+[.)]?$/;
 	// Used only when the page has no ytcfg, e.g. before YouTube finishes booting.
 	const FALLBACK_INNERTUBE_CONTEXT = {
 		client: { clientName: "WEB", clientVersion: "2.20261029.11.00" },
@@ -296,15 +299,24 @@
 		return text.split(":").reduce((sec, part) => sec * 60 + Number(part), 0);
 	}
 
+	function setlistTitle(rest) {
+		const fields = rest
+			.split("\t")
+			.map((f) => f.trim())
+			.filter(Boolean);
+		if (fields.length > 1 && TRACK_NUMBER_RE.test(fields[0])) fields.shift();
+		return fields.join(" / ");
+	}
+
 	function parseSetlist(text) {
 		const entries = [];
 		for (const line of text.split(/\r?\n/)) {
-			const m = line.match(SETLIST_LINE_RE);
+			const m = line.match(TIMESTAMP_RE);
 			if (m) {
 				entries.push({
 					time: m[1],
 					seconds: parseTimestamp(m[1]),
-					title: m[2].trim(),
+					title: setlistTitle(line.replace(TIMESTAMP_RE, "\t")),
 				});
 			}
 		}

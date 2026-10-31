@@ -45,9 +45,11 @@ The default is remembered across visits and its button is underlined.
 
 ### Setlist
 
-When a top comment has three or more lines starting with a timestamp
-(e.g. `00:22:32 都落ち / ヨルシカ`), a `SET LIST` button appears next to the
-speed buttons. The comment with the most timestamps is used.
+When a top comment has three or more lines with a timestamp,
+a `SET LIST` button appears next to the speed buttons.
+The timestamp can be at the start of the line (`00:22:32 Song / Artist`)
+or in a tab-separated column (`1  Song  Artist  0:10:21`).
+The comment with the most timestamps is used.
 Click the button to open the list, and click a line to jump to that time
 and close the list.
 

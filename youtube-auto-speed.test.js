@@ -264,6 +264,27 @@ describe("setlist", () => {
 		]);
 	});
 
+	it("reads a tab-separated setlist with the time at the end of each line", async () => {
+		stubInnertube([
+			[
+				"セトリ",
+				"1\tHappy Halloween\tJunky\t0:10:21",
+				"2\tモニタリング\tDECO*27\t0:17:27",
+				"12\t蜜月アン・ドゥ・トロワ\tDATEKEN\t1:35:22",
+			].join("\r\n"),
+		]);
+		loadScript();
+		await vi.waitFor(() => expect(setlistButton().hidden).toBe(false));
+
+		setlistButton().click();
+
+		expect(setlistRows().map((r) => r.textContent)).toEqual([
+			"0:10:21 Happy Halloween / Junky",
+			"0:17:27 モニタリング / DECO*27",
+			"1:35:22 蜜月アン・ドゥ・トロワ / DATEKEN",
+		]);
+	});
+
 	it("seeks to the clicked time and closes the list", async () => {
 		stubInnertube([SETLIST_COMMENT]);
 		const player = document.createElement("div");
