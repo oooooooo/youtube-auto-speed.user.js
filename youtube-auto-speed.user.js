@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Auto Speed
 // @namespace    https://github.com/oooooooo/youtube-auto-speed
-// @version      1.5.0
+// @version      1.5.1
 // @description  Speeds up videos except for music. You can also adjust the speed manually.
 // @author       ooooooooo
 // @match        https://www.youtube.com/*
@@ -44,6 +44,11 @@
 	const TRACK_NUMBER_RE = /^\d+[.)]?$/;
 	// Viewers often post just the start time ("0:17") as a comment.
 	const TIMESTAMP_ONLY_RE = new RegExp(`^${TIMESTAMP_RE.source}$`);
+	// A time next to a date ("5/20(水) 18:00", "2026/6/11", "6月17日") is a clock
+	// time, e.g. in pasted news headlines, not a position in the video. A bare
+	// "1/2" is not a date because it can be a song title.
+	const DATE_RE =
+		/\d{1,2}\/\d{1,2}\s*[(（][日月火水木金土]|\d{4}\/\d{1,2}\/\d{1,2}|\d{1,2}月\d{1,2}日/;
 	// Lines such as "00:09:18 START" or "00:01:05 配信開始" mark the start.
 	const START_TITLE_RE = /start|開始|スタート/i;
 	// Used only when the page has no ytcfg, e.g. before YouTube finishes booting.
@@ -370,6 +375,7 @@
 	function parseSetlist(text) {
 		const entries = [];
 		for (const line of text.split(/\r?\n/)) {
+			if (DATE_RE.test(line)) continue;
 			const parts = splitSetlistLine(line);
 			if (!parts) continue;
 			const seconds = parseTimestamp(parts.time);

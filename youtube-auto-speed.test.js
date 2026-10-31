@@ -625,6 +625,36 @@ describe("timestamps", () => {
 		expect(row.textContent).toBe("00:22:32 都落ち / ヨルシカ");
 	});
 
+	it("ignores times next to a date, such as pasted news headlines", async () => {
+		const news = [
+			"ホロライブ・大空スバル、チャンネル登録者が200万人を突破",
+			"エンタメ総合",
+			"5/20(水) 18:00",
+			"エンタメ総合",
+			"5/28(木) 18:00",
+			"2026/6/11 18:00",
+			"6月17日 18:00",
+		].join("\n");
+		const talk = [
+			"タイムスタンプ🍮",
+			"2:30 あじまる屋さん",
+			"13:00 鼻ドスの話",
+			"20:31 サインの話",
+			"25:30 1/2 / 川本真琴",
+		].join("\r\n");
+		stubInnertube([news, talk]);
+		loadScript();
+		await vi.waitFor(() => expect(timestampsButton().hidden).toBe(false));
+		timestampsButton().click();
+
+		expect(timestampLabels()).toEqual([
+			"2:30 あじまる屋さん",
+			"13:00 鼻ドスの話",
+			"20:31 サインの話",
+			"25:30 1/2 / 川本真琴",
+		]);
+	});
+
 	it("reads a tab-separated setlist with the time at the end of each line", async () => {
 		stubInnertube([
 			[

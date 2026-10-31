@@ -53,6 +53,8 @@ other video.
 The timestamp can be at the start of the line (`00:22:32 Song / Artist`)
 or in a tab-separated column (`1  Song  Artist  0:10:21`).
 Lines at `0:00` are ignored because they usually mark the waiting screen.
+Lines with a date (`5/20(水) 18:00`, `2026/6/11`, `6月17日`) are ignored
+because their times are clock times, such as in pasted news headlines.
 The comment with the most timestamps is used.
 
 Viewers also post the start of a stream as a comment that is only a
