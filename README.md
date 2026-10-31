@@ -63,6 +63,10 @@ The button also appears when there is only such a comment.
 Click the button to open the list, and click a line to jump to that time
 and close the list.
 
+When the list has a start line (a title with `START`, `開始` or `スタート`),
+the video jumps there automatically once, unless the URL has a start
+position (`&t=`) or the video is already past it.
+
 The comments are fetched from YouTube's internal API,
 so this feature may stop working if YouTube changes it.
 

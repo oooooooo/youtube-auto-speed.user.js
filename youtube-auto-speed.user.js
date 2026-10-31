@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Auto Speed
 // @namespace    https://github.com/oooooooo/youtube-auto-speed
-// @version      1.4.2
+// @version      1.5.0
 // @description  Speeds up videos except for music. You can also adjust the speed manually.
 // @author       ooooooooo
 // @match        https://www.youtube.com/*
@@ -44,6 +44,8 @@
 	const TRACK_NUMBER_RE = /^\d+[.)]?$/;
 	// Viewers often post just the start time ("0:17") as a comment.
 	const TIMESTAMP_ONLY_RE = new RegExp(`^${TIMESTAMP_RE.source}$`);
+	// Lines such as "00:09:18 START" or "00:01:05 配信開始" mark the start.
+	const START_TITLE_RE = /start|開始|スタート/i;
 	// Used only when the page has no ytcfg, e.g. before YouTube finishes booting.
 	const SOURCE_LOCATION_RE = /([^\s()/]+:\d+):\d+/;
 	const FALLBACK_INNERTUBE_CONTEXT = {
@@ -510,6 +512,27 @@
 		if (v) v.currentTime = seconds;
 	}
 
+	function streamStart(entries) {
+		let start = null;
+		for (const entry of entries) {
+			if (!START_TITLE_RE.test(entry.title)) continue;
+			if (start == null || entry.seconds < start.seconds) start = entry;
+		}
+		return start;
+	}
+
+	// Jumps once per load. It stays put when the URL asks for a position
+	// (&t=) or the video is already past the start, e.g. when resuming.
+	function autoSeekToStart(entries) {
+		const start = streamStart(entries);
+		if (!start) return false;
+		if (new URLSearchParams(location.search).has("t")) return true;
+		const video = mainVideo();
+		if (!video) return false;
+		if (video.currentTime < start.seconds) seekTo(start.seconds);
+		return true;
+	}
+
 	function setTimestamps(entries) {
 		timestampEntries = entries;
 		renderTimestamps();
@@ -551,12 +574,15 @@
 
 		try {
 			const texts = [];
+			let seekDone = false;
 			for await (const pageTexts of fetchCommentPages(videoId)) {
 				// Stop if another load started, even for the same video after
 				// navigating away and back.
 				if (request !== timestampsRequest) return;
 				texts.push(...pageTexts);
-				setTimestamps(pickTimestamps(texts));
+				const entries = pickTimestamps(texts);
+				setTimestamps(entries);
+				if (!seekDone) seekDone = autoSeekToStart(entries);
 			}
 		} catch (err) {
 			if (request !== timestampsRequest) return;

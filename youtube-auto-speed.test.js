@@ -1007,3 +1007,113 @@ describe("timestamps", () => {
 		expect(timestampsButton().hidden).toBe(true);
 	});
 });
+
+describe("auto seek to the start", () => {
+	beforeEach(() => {
+		history.replaceState(null, "", "/watch?v=abc");
+	});
+
+	function stubPlayingVideo(currentTime = 0) {
+		const { player, video } = stubWatchPlayer({
+			videoId: "abc",
+			title: "Talk",
+			duration: 7200,
+		});
+		Object.defineProperty(video, "currentTime", {
+			value: currentTime,
+			configurable: true,
+		});
+		return player;
+	}
+
+	it("jumps to a START line in the setlist", async () => {
+		stubInnertube([SETLIST_COMMENT]);
+		const player = stubPlayingVideo();
+
+		loadScript();
+
+		await vi.waitFor(() =>
+			expect(player.seekTo).toHaveBeenCalledWith(9 * 60 + 18, true),
+		);
+	});
+
+	it("jumps to a line that says the stream started", async () => {
+		stubInnertube([
+			["00:01:05 配信開始", "00:03:42 大会開始", "00:11:31 でんせつ"].join(
+				"\n",
+			),
+		]);
+		const player = stubPlayingVideo();
+
+		loadScript();
+
+		await vi.waitFor(() =>
+			expect(player.seekTo).toHaveBeenCalledWith(65, true),
+		);
+		expect(player.seekTo).toHaveBeenCalledTimes(1);
+	});
+
+	it("jumps to a comment that is only a timestamp", async () => {
+		stubInnertube(["0:17"]);
+		const player = stubPlayingVideo();
+
+		loadScript();
+
+		await vi.waitFor(() =>
+			expect(player.seekTo).toHaveBeenCalledWith(17, true),
+		);
+	});
+
+	it("does not jump to the first song of a setlist without a start", async () => {
+		const fetchMock = stubInnertube([
+			[
+				"1\tSong A\tArtist\t0:10:21",
+				"2\tSong B\tArtist\t0:17:27",
+				"3\tSong C\tArtist\t0:24:32",
+			].join("\n"),
+		]);
+		const player = stubPlayingVideo();
+
+		loadScript();
+
+		await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+		await vi.advanceTimersByTimeAsync(100);
+		expect(timestampsButton().hidden).toBe(false);
+		expect(player.seekTo).not.toHaveBeenCalled();
+	});
+
+	it("does not jump when the URL has a start position", async () => {
+		history.replaceState(null, "", "/watch?v=abc&t=100");
+		const fetchMock = stubInnertube([SETLIST_COMMENT]);
+		const player = stubPlayingVideo();
+
+		loadScript();
+
+		await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+		await vi.advanceTimersByTimeAsync(100);
+		expect(player.seekTo).not.toHaveBeenCalled();
+	});
+
+	it("does not jump back when the video is already past the start", async () => {
+		const fetchMock = stubInnertube([SETLIST_COMMENT]);
+		const player = stubPlayingVideo(1200);
+
+		loadScript();
+
+		await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+		await vi.advanceTimersByTimeAsync(100);
+		expect(player.seekTo).not.toHaveBeenCalled();
+	});
+
+	it("jumps only once even if a later page has an earlier start", async () => {
+		const fetchMock = stubInnertubePages([[SETLIST_COMMENT], ["5:00"]]);
+		const player = stubPlayingVideo();
+
+		loadScript();
+
+		await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
+		await vi.advanceTimersByTimeAsync(100);
+		expect(player.seekTo).toHaveBeenCalledTimes(1);
+		expect(player.seekTo).toHaveBeenCalledWith(9 * 60 + 18, true);
+	});
+});
