@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Auto Speed
 // @namespace    https://github.com/oooooooo/youtube-auto-speed
-// @version      1.3.1
+// @version      1.4.0
 // @description  Speeds up videos except for music. You can also adjust the speed manually.
 // @author       ooooooooo
 // @match        https://www.youtube.com/*
@@ -28,9 +28,8 @@
 	const AUTO_RETRY_COUNT = 15;
 	const AUTO_RETRY_INTERVAL_MS = 120;
 	const ENFORCE_MS = 2000;
-	const START_BTN_ID = "yt-speed-start-btn";
-	const SETLIST_BTN_ID = "yt-speed-setlist-btn";
-	const SETLIST_PANEL_ID = "yt-speed-setlist-panel";
+	const TIMESTAMPS_BTN_ID = "yt-speed-timestamps-btn";
+	const TIMESTAMPS_PANEL_ID = "yt-speed-timestamps-panel";
 	const MIN_SETLIST_ENTRIES = 3;
 	// Top comments come back in a slightly different order on every request,
 	// so the setlist is not always on the first page.
@@ -52,9 +51,8 @@
 	let enforceUntil = 0;
 	let lastVideoId = null;
 	let observer = null;
-	let setlistVideoId = null;
-	let setlistEntries = [];
-	let startCandidates = [];
+	let timestampsVideoId = null;
+	let timestampEntries = [];
 	const hooked = new WeakSet();
 
 	const style = `
@@ -83,7 +81,7 @@
     }
     .${BTN_CLASS}.default { text-decoration: underline; }
     #${CONTAINER_ID} { position: relative; }
-    #${SETLIST_PANEL_ID} {
+    #${TIMESTAMPS_PANEL_ID} {
       position: absolute;
       top: calc(100% + 6px);
       left: 0;
@@ -96,8 +94,8 @@
       background: #212121;
       box-shadow: 0 4px 16px rgba(0,0,0,0.5);
     }
-    #${SETLIST_PANEL_ID}[hidden] { display: none; }
-    #${SETLIST_PANEL_ID} button {
+    #${TIMESTAMPS_PANEL_ID}[hidden] { display: none; }
+    #${TIMESTAMPS_PANEL_ID} button {
       display: block;
       width: 100%;
       padding: 6px 8px;
@@ -110,7 +108,7 @@
       text-align: left;
       cursor: pointer;
     }
-    #${SETLIST_PANEL_ID} button:hover { background: rgba(255,255,255,0.15); }
+    #${TIMESTAMPS_PANEL_ID} button:hover { background: rgba(255,255,255,0.15); }
   `;
 
 	function loadDefaultRate() {
@@ -281,35 +279,24 @@
 			container.appendChild(mk(`x${rate.toFixed(1)}`, rate));
 		}
 
-		const startBtn = document.createElement("button");
-		startBtn.id = START_BTN_ID;
-		startBtn.className = BTN_CLASS;
-		startBtn.textContent = "START";
-		startBtn.hidden = true;
-		startBtn.onclick = () => {
-			const seconds = streamStartSeconds();
-			if (seconds != null) seekTo(seconds);
-		};
-		container.appendChild(startBtn);
-
-		const setlistBtn = document.createElement("button");
-		setlistBtn.id = SETLIST_BTN_ID;
-		setlistBtn.className = BTN_CLASS;
-		setlistBtn.textContent = "SET LIST";
-		setlistBtn.hidden = true;
-		setlistBtn.onclick = () => {
-			const panel = document.getElementById(SETLIST_PANEL_ID);
+		const timestampsBtn = document.createElement("button");
+		timestampsBtn.id = TIMESTAMPS_BTN_ID;
+		timestampsBtn.className = BTN_CLASS;
+		timestampsBtn.textContent = "TIMESTAMPS";
+		timestampsBtn.hidden = true;
+		timestampsBtn.onclick = () => {
+			const panel = document.getElementById(TIMESTAMPS_PANEL_ID);
 			panel.hidden = !panel.hidden;
 		};
-		container.appendChild(setlistBtn);
+		container.appendChild(timestampsBtn);
 
 		const panel = document.createElement("div");
-		panel.id = SETLIST_PANEL_ID;
+		panel.id = TIMESTAMPS_PANEL_ID;
 		panel.hidden = true;
 		container.appendChild(panel);
 
 		logo.parentElement.insertBefore(container, logo.nextSibling);
-		renderSetlist();
+		renderTimestamps();
 		setPlaybackRate(currentRate, false);
 	}
 
@@ -393,15 +380,28 @@
 		return res.json();
 	}
 
-	function pickStartCandidates(commentTexts) {
-		const seconds = [];
+	// The earliest comment that is only a timestamp, which marks the start.
+	function pickStart(commentTexts) {
+		let start = null;
 		for (const text of commentTexts) {
 			const m = text.trim().match(TIMESTAMP_ONLY_RE);
 			if (!m) continue;
-			const sec = parseTimestamp(m[1]);
-			if (sec > 0) seconds.push(sec);
+			const seconds = parseTimestamp(m[1]);
+			if (seconds > 0 && (start == null || seconds < start.seconds)) {
+				start = { time: m[1], seconds, title: "START" };
+			}
 		}
-		return seconds;
+		return start;
+	}
+
+	// Setlists often list only the songs, so the start time is put in front
+	// unless the setlist already begins at or before it.
+	function pickTimestamps(commentTexts) {
+		const setlist = pickSetlist(commentTexts);
+		const start = pickStart(commentTexts);
+		if (!start) return setlist;
+		if (setlist.some((e) => e.seconds <= start.seconds)) return setlist;
+		return [start, ...setlist];
 	}
 
 	// Only top-level items are checked: each comment thread also holds a
@@ -452,29 +452,20 @@
 		if (v) v.currentTime = seconds;
 	}
 
-	function setSetlist(entries, starts) {
-		setlistEntries = entries;
-		startCandidates = starts;
-		renderSetlist();
+	function setTimestamps(entries) {
+		timestampEntries = entries;
+		renderTimestamps();
 	}
 
-	// The stream starts at the earliest time in the setlist or in a
-	// timestamp-only comment.
-	function streamStartSeconds() {
-		const times = [...setlistEntries.map((e) => e.seconds), ...startCandidates];
-		return times.length > 0 ? Math.min(...times) : null;
-	}
-
-	function renderSetlist() {
-		const startBtn = document.getElementById(START_BTN_ID);
-		const btn = document.getElementById(SETLIST_BTN_ID);
-		const panel = document.getElementById(SETLIST_PANEL_ID);
-		if (!startBtn || !btn || !panel) return;
+	function renderTimestamps() {
+		const btn = document.getElementById(TIMESTAMPS_BTN_ID);
+		const panel = document.getElementById(TIMESTAMPS_PANEL_ID);
+		if (!btn || !panel) return;
 
 		// Keep the list open while later pages refine it.
-		if (setlistEntries.length === 0) panel.hidden = true;
+		if (timestampEntries.length === 0) panel.hidden = true;
 		panel.replaceChildren(
-			...setlistEntries.map((entry) => {
+			...timestampEntries.map((entry) => {
 				const row = document.createElement("button");
 				row.textContent = entry.title
 					? `${entry.time} ${entry.title}`
@@ -486,27 +477,26 @@
 				return row;
 			}),
 		);
-		btn.hidden = setlistEntries.length === 0;
-		startBtn.hidden = streamStartSeconds() == null;
+		btn.hidden = timestampEntries.length === 0;
 	}
 
-	async function loadSetlist() {
+	async function loadTimestamps() {
 		const videoId = location.pathname === "/watch" ? getVideoId() : null;
-		if (videoId === setlistVideoId) return;
-		setlistVideoId = videoId;
-		setSetlist([], []);
+		if (videoId === timestampsVideoId) return;
+		timestampsVideoId = videoId;
+		setTimestamps([]);
 		if (!videoId) return;
 
 		try {
 			const texts = [];
 			for await (const pageTexts of fetchCommentPages(videoId)) {
 				// Stop if the user navigated to another video meanwhile.
-				if (setlistVideoId !== videoId) return;
+				if (timestampsVideoId !== videoId) return;
 				texts.push(...pageTexts);
-				setSetlist(pickSetlist(texts), pickStartCandidates(texts));
+				setTimestamps(pickTimestamps(texts));
 			}
 		} catch (err) {
-			reportProblem("Failed to load setlist", err);
+			reportProblem("Failed to load timestamps", err);
 		}
 	}
 
@@ -574,19 +564,20 @@
 		);
 
 		document.addEventListener("click", (e) => {
-			const panel = document.getElementById(SETLIST_PANEL_ID);
+			const panel = document.getElementById(TIMESTAMPS_PANEL_ID);
 			if (!panel || panel.hidden) return;
 			if (panel.contains(e.target)) return;
-			if (document.getElementById(SETLIST_BTN_ID)?.contains(e.target)) return;
+			if (document.getElementById(TIMESTAMPS_BTN_ID)?.contains(e.target))
+				return;
 			panel.hidden = true;
 		});
 
-		loadSetlist();
+		loadTimestamps();
 
 		window.addEventListener("yt-navigate-finish", () => {
 			createButtons();
 			autoSetSpeed();
-			loadSetlist();
+			loadTimestamps();
 		});
 	}
 
