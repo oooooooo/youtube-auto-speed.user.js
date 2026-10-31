@@ -18,7 +18,9 @@
 
 	const MAX_SLOW_DURATION_SEC = 6 * 60;
 	const RATE_SLOW = 1.0;
-	const RATE_FAST = 2.7;
+	const RATE_MID = 2.5;
+	const RATE_FAST = 3.0;
+	const RATE_FASTER = 3.5;
 	const CONTAINER_ID = "yt-speed-buttons-container-v4";
 	const BTN_CLASS = "yt-speed-btn-v5";
 	const AUTO_RETRY_COUNT = 15;
@@ -197,7 +199,9 @@
 		}
 
 		container.appendChild(mk(`x${RATE_SLOW.toFixed(1)}`, RATE_SLOW));
+		container.appendChild(mk(`x${RATE_MID.toFixed(1)}`, RATE_MID));
 		container.appendChild(mk(`x${RATE_FAST.toFixed(1)}`, RATE_FAST));
+		container.appendChild(mk(`x${RATE_FASTER.toFixed(1)}`, RATE_FASTER));
 
 		logo.parentElement.insertBefore(container, logo.nextSibling);
 		setPlaybackRate(currentRate, false);

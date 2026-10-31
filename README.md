@@ -4,7 +4,7 @@ A userscript that automatically plays YouTube videos at high speed, except for m
 
 ## Features
 
-- **Fast playback (2.7x)** for regular videos
+- **Fast playback (3.0x)** for regular videos
 - **Normal playback (1.0x)** for music content
 - **Manual override buttons** in the YouTube header for quick speed adjustment
 
@@ -14,8 +14,8 @@ A userscript that automatically plays YouTube videos at high speed, except for m
 
 | Content Type | Speed |
 |--------------|-------|
-| Regular videos | 2.7x |
-| YouTube Shorts | 2.7x |
+| Regular videos | 3.0x |
+| YouTube Shorts | 3.0x |
 | Music | 1.0x |
 
 ### Music Detection
@@ -30,11 +30,11 @@ A video is considered music if it meets **any** of the following criteria:
 
 2. **Duration is 6 minutes or less**
    - Short videos are often music content
-   - Exception: YouTube Shorts are always played at 2.7x speed
+   - Exception: YouTube Shorts are always played at 3.0x speed
 
 ### Manual Override
 
-Since automatic detection isn't perfect, speed buttons (`x1.0` and `x2.7`) are displayed next to the YouTube logo in the top-left corner of the page. Click them to manually adjust the playback speed when needed.
+Since automatic detection isn't perfect, speed buttons (`x1.0`, `x2.5`, `x3.0` and `x3.5`) are displayed next to the YouTube logo in the top-left corner of the page. Click them to manually adjust the playback speed when needed.
 
 ## Installation
 
