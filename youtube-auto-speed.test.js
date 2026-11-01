@@ -221,6 +221,18 @@ function timestampLabels() {
 	return timestampRows().map((r) => r.textContent);
 }
 
+function timestampsPanel() {
+	return document.getElementById("yt-speed-timestamps-panel");
+}
+
+function hover(el) {
+	el.dispatchEvent(new MouseEvent("mouseenter"));
+}
+
+function unhover(el) {
+	el.dispatchEvent(new MouseEvent("mouseleave"));
+}
+
 function timestampsPanelOpen() {
 	const panel = document.getElementById("yt-speed-timestamps-panel");
 	return panel != null && !panel.hidden;
@@ -877,7 +889,7 @@ describe("timestamps", () => {
 		expect(timestampsPanelOpen()).toBe(false);
 	});
 
-	it("closes the list on a click outside it or on the TIMESTAMPS button", async () => {
+	it("closes the list on a click outside it", async () => {
 		stubInnertube([SETLIST_COMMENT]);
 		loadScript();
 		await vi.waitFor(() => expect(timestampsButton().hidden).toBe(false));
@@ -885,9 +897,56 @@ describe("timestamps", () => {
 		timestampsButton().click();
 		document.body.click();
 		expect(timestampsPanelOpen()).toBe(false);
+	});
 
+	it("keeps the list open on a click on the TIMESTAMPS button", async () => {
+		stubInnertube([SETLIST_COMMENT]);
+		loadScript();
+		await vi.waitFor(() => expect(timestampsButton().hidden).toBe(false));
+
+		// A tap on a touch screen opens the list without a hover.
 		timestampsButton().click();
 		timestampsButton().click();
+
+		expect(timestampsPanelOpen()).toBe(true);
+	});
+
+	it("opens the list when the pointer is over the TIMESTAMPS button", async () => {
+		stubInnertube([SETLIST_COMMENT]);
+		loadScript();
+		await vi.waitFor(() => expect(timestampsButton().hidden).toBe(false));
+
+		hover(timestampsButton());
+
+		expect(timestampsPanelOpen()).toBe(true);
+	});
+
+	it("closes the list shortly after the pointer leaves the TIMESTAMPS button", async () => {
+		stubInnertube([SETLIST_COMMENT]);
+		loadScript();
+		await vi.waitFor(() => expect(timestampsButton().hidden).toBe(false));
+		hover(timestampsButton());
+
+		unhover(timestampsButton());
+		expect(timestampsPanelOpen()).toBe(true);
+		vi.advanceTimersByTime(300);
+
+		expect(timestampsPanelOpen()).toBe(false);
+	});
+
+	it("keeps the list open while the pointer moves from the button to the list", async () => {
+		stubInnertube([SETLIST_COMMENT]);
+		loadScript();
+		await vi.waitFor(() => expect(timestampsButton().hidden).toBe(false));
+		hover(timestampsButton());
+
+		unhover(timestampsButton());
+		hover(timestampsPanel());
+		vi.advanceTimersByTime(1000);
+		expect(timestampsPanelOpen()).toBe(true);
+
+		unhover(timestampsPanel());
+		vi.advanceTimersByTime(300);
 		expect(timestampsPanelOpen()).toBe(false);
 	});
 

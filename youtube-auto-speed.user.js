@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Auto Speed
 // @namespace    https://github.com/oooooooo/youtube-auto-speed
-// @version      1.5.2
+// @version      1.6.0
 // @description  Speeds up videos except for music. You can also adjust the speed manually.
 // @author       ooooooooo
 // @match        https://www.youtube.com/*
@@ -30,6 +30,7 @@
 	const ENFORCE_MS = 2000;
 	const TIMESTAMPS_BTN_ID = "yt-speed-timestamps-btn";
 	const TIMESTAMPS_PANEL_ID = "yt-speed-timestamps-panel";
+	const HOVER_CLOSE_DELAY_MS = 300;
 	const TIME_CLASS = "yt-speed-time";
 	const MIN_SETLIST_ENTRIES = 3;
 	// Top comments come back in a slightly different order on every request,
@@ -331,16 +332,33 @@
 		timestampsBtn.className = BTN_CLASS;
 		timestampsBtn.textContent = "TIMESTAMPS";
 		timestampsBtn.hidden = true;
-		timestampsBtn.onclick = () => {
-			const panel = document.getElementById(TIMESTAMPS_PANEL_ID);
-			panel.hidden = !panel.hidden;
-		};
 		container.appendChild(timestampsBtn);
 
 		const panel = document.createElement("div");
 		panel.id = TIMESTAMPS_PANEL_ID;
 		panel.hidden = true;
 		container.appendChild(panel);
+
+		let closeTimer = null;
+		const open = () => {
+			clearTimeout(closeTimer);
+			panel.hidden = false;
+		};
+		// The delay lets the pointer cross the gap between the button and the
+		// list without closing it.
+		const closeSoon = () => {
+			clearTimeout(closeTimer);
+			closeTimer = setTimeout(() => {
+				panel.hidden = true;
+			}, HOVER_CLOSE_DELAY_MS);
+		};
+		timestampsBtn.addEventListener("mouseenter", open);
+		timestampsBtn.addEventListener("mouseleave", closeSoon);
+		panel.addEventListener("mouseenter", open);
+		panel.addEventListener("mouseleave", closeSoon);
+		// Clicking only opens, so a click on the button after a hover does not
+		// close the list. Touch screens have no hover and rely on this.
+		timestampsBtn.onclick = open;
 
 		logo.parentElement.insertBefore(container, logo.nextSibling);
 		renderTimestamps();
